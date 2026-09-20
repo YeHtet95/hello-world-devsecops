@@ -66,6 +66,20 @@ kubectl apply -k k8s/
 Then: <https://hello.127.0.0.1.nip.io:8443/> (self-signed certificate, so
 expect a browser warning).
 
+Manual `kubectl` is for iteration only, per the brief. The pipeline path is
+live as far as the registry: pushing a change under `app/` triggers
+[`build-scan-publish`](.github/workflows/build-scan-publish.yml), which
+builds, scans, publishes to GHCR and commits the new digest to
+[`k8s/kustomization.yaml`](k8s/kustomization.yaml). The final hop — Argo CD
+noticing that commit and reconciling — is not yet installed, so
+`kubectl apply -k k8s/` stands in for it. What it deploys is the exact digest
+CI published, pulled from GHCR rather than side-loaded:
+
+```console
+$ kubectl -n hello-world get pod -o jsonpath='{.items[0].status.containerStatuses[0].imageID}'
+ghcr.io/yehtet95/hello-world-devsecops@sha256:6d58c0a2ee1d…
+```
+
 ### Verified working
 
 Each of these was checked against the running cluster, not assumed:
@@ -74,7 +88,7 @@ Each of these was checked against the running cluster, not assumed:
 | ------------------------------------------- | --------------------------------------------------------------- |
 | Page served over HTTPS through the ingress  | `HTTP 200`                                                      |
 | Plain HTTP                                  | `HTTP 308` redirect to HTTPS                                    |
-| Container user                              | `uid=101(nginx)` — not root                                     |
+| Container user                              | `uid=10101` — not root, and above the host-collision range      |
 | Write to web root (`/usr/share/nginx/html`) | `Read-only file system`                                         |
 | Write to `/tmp`                             | permitted — the one writable path, an `emptyDir` capped at 16Mi |
 | ServiceAccount token inside the pod         | `No such file or directory` — not mounted                       |
@@ -379,5 +393,8 @@ the workload restriction above matters independently.
 
 ## Open items
 
-- Pipeline (GitHub Actions), Argo CD, Trivy Operator and oauth2-proxy are not
-  yet built.
+- Argo CD, Trivy Operator and oauth2-proxy are not yet built. Until Argo CD
+  is installed, the pipeline's final commit has nothing watching it, so the
+  cluster is still updated by a manual `kubectl apply -k k8s/`.
+- The blocking thresholds — HIGH/CRITICAL for images, MEDIUM and above for
+  manifests — are a judgement call, not a standard.
