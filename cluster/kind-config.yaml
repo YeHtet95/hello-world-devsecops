@@ -1,0 +1,35 @@
+# Local stand-in for the AKS cluster this would really run on.
+#
+# Single node: this is a demo cluster, and High Availability is not included
+#
+# The node image is pinned by digest, not just by tag: tags are mutable and
+# `kindest/node:v1.36.1` can be repushed. The digest means every reviewer who
+# runs this gets bit-identical control-plane and kubelet binaries. Same reason
+# the application image is pinned by digest in the Argo CD manifests.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: hello-world
+
+nodes:
+  - role: control-plane
+    image: kindest/node:v1.36.1@sha256:3489c7674813ba5d8b1a9977baea8a6e553784dab7b84759d1014dbd78f7ebd5
+
+    # ingress-nginx is pinned to this node by nodeSelector. On AKS the
+    # controller would sit on a normal node pool behind an Azure LB instead.
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
+
+    # Docker Desktop publishes these straight to macOS localhost, so the
+    # ingress is reachable at https://<host>.127.0.0.1.nip.io:8443 with no
+    # kubectl port-forward in the demo path.
+    extraPortMappings:
+      - containerPort: 80
+        hostPort: 8080
+        protocol: TCP
+      - containerPort: 443
+        hostPort: 8443
+        protocol: TCP

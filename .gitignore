@@ -1,0 +1,19 @@
+# macOS
+.DS_Store
+
+# Kubeconfigs — never commit cluster credentials
+*.kubeconfig
+kubeconfig*
+.kube/
+
+# Helm
+charts/*.tgz
+
+# Local env / secrets
+.env
+.env.*
+*.pem
+*.key
+
+# The assessment brief itself — not mine to publish
+tech-challenge-devsecops-engineer.md

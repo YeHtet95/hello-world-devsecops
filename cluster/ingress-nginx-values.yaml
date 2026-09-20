@@ -1,0 +1,48 @@
+# ingress-nginx for the kind cluster.
+#
+# On AKS this same controller would sit behind an Azure Load Balancer with
+# service.type=LoadBalancer. kind has no cloud provider, so the controller
+# binds the node's ports directly via hostPort, and kind's extraPortMappings
+# forward those to macOS localhost.
+controller:
+  # Bind 80/443 on the node itself
+  hostPort:
+    enabled: true
+    ports:
+      http: 80
+      https: 443
+
+  # Pinned to the node labelled ingress-ready=true by kind-config.yaml, and
+  # tolerating the control-plane taint because that is the only node here.
+  # On AKS: drop both, and let it schedule on a normal node pool.
+  nodeSelector:
+    ingress-ready: "true"
+  tolerations:
+    - key: node-role.kubernetes.io/control-plane
+      operator: Equal
+      effect: NoSchedule
+    - key: node-role.kubernetes.io/master
+      operator: Equal
+      effect: NoSchedule
+
+  service:
+    type: NodePort
+
+  # No LoadBalancer means no external IP to publish into Ingress status.
+  publishService:
+    enabled: false
+  extraArgs:
+    publish-status-address: localhost
+
+  # Demo cluster: one replica, modest requests so Argo CD and the Trivy
+  # operator still fit alongside it.
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+  # Every Ingress in this repo sets ingressClassName explicitly; leaving this
+  # false means a manifest that forgets it is simply not served, rather than
+  # being silently picked up. Fail closed.
+  watchIngressWithoutClass: false
