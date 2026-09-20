@@ -466,6 +466,34 @@ everybody has a copy of. Local accounts on the AKS cluster disabled.
 
 ### The finding you can't fix
 
+**This stopped being hypothetical during the build.** Within an hour of
+installing Trivy Operator, it flagged the component added to *enforce
+authentication* as the most vulnerable workload in the namespace:
+oauth2-proxy v7.13.0, 4 critical and 14 high — two of them
+(`CVE-2026-34457`, `CVE-2026-40575`) in oauth2-proxy's own code.
+
+Two things worth drawing out:
+
+*The build pipeline structurally could not have caught this.* oauth2-proxy is
+pulled from a third party and never passes through our CI, so no build-time
+gate ever looks at it. Every image scanner in the pipeline is aimed at the
+one image we build. This is precisely the gap the in-cluster scanner exists
+to cover, and it covered it immediately.
+
+*I made the mistake the pipeline is designed to prevent.* I pinned v7.13.0
+without scanning it first, having just built a whole apparatus for exactly
+that check. The control worked where the human did not, which is the argument
+for having the control.
+
+Upgrading to v7.15.3 cleared the criticals. What remains is the genuinely
+unfixable part: ~15 fixable-in-principle HIGH findings in transitive Go
+dependencies — `grpc`, `golang.org/x/net`, the Go stdlib. "Fixed version:
+1.25.9" is true of the library and useless to me: I cannot rebuild someone
+else's Go binary. Only upstream can, by recompiling against a newer
+toolchain. So this is the real case, and the process below is what it gets.
+
+---
+
 A critical CVE in the nginx base image with no patch available is the normal
 case, not the exception, and the first move is not technical: establish whether
 it is reachable. A critical in a library that ships in the image but is never
