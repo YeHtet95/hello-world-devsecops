@@ -18,7 +18,11 @@ The application is one HTML file.
 | Workload hardening (non-root, read-only FS) | **Built**                    | [`k8s/deployment.yaml`](k8s/deployment.yaml)                                       |
 | Pod Security Admission (`restricted`)       | **Built**                    | [`k8s/namespace.yaml`](k8s/namespace.yaml)                                         |
 | NetworkPolicy                               | **Written, inert on kind**   | [`k8s/networkpolicy.yaml`](k8s/networkpolicy.yaml)                                 |
-| Reaches the cluster through automation      | _Designed, not built_        | [Deployment model](#deployment-model-the-pipeline-never-holds-cluster-credentials) |
+| Pipeline: build, scan, publish to GHCR      | **Built**                    | [`.github/workflows/`](.github/workflows/build-scan-publish.yml)                   |
+| Build-time scan with a blocking threshold   | **Built**                    | same — gates 1 and 3                                                               |
+| Manifest misconfiguration scan (blocking)   | **Built**                    | same, plus [`.trivyignore.yaml`](.trivyignore.yaml)                                |
+| SBOM + provenance attestations              | **Built**                    | same — `sbom: true`, `provenance: mode=max`                                        |
+| Reaches the cluster through automation      | _Half built_                 | CI publishes and commits the digest; Argo CD not yet installed                     |
 | Scheduled vulnerability scanning in-cluster | _Designed, not built_        | [Acting on scan results](#acting-on-scan-results)                                  |
 | Authentication in front of the page         | _Designed, not built_        | [Authentication](#authentication)                                                  |
 | AKS provisioning                            | _Discussion only, by design_ | brief §4                                                                           |
@@ -160,15 +164,42 @@ long-lived bearer credential that typically carries far more scope than one
 repo's packages and is rotated only when somebody remembers.
 
 **To the cluster: nothing.** The pipeline has no cluster credential at all,
-because it never talks to the cluster.
+because it never talks to the cluster. It ends by committing an image digest
+to this repository; the cluster is what reaches out. There is no kubeconfig,
+no service principal, and no inbound network path to the cluster anywhere
+in CI.
+
+**What the token *can* do, and why.** The job requests three scopes and no
+more: `packages: write` to push the image, `security-events: write` to file
+SARIF, and `contents: write` to commit the digest. The workflow's top-level
+default is `contents: read`, so anything added later starts read-only and has
+to ask. `contents: write` is the one worth scrutinising — it lets CI push to
+`main`. It is scoped to this repository and dies with the job, but on a
+protected branch this is where you would instead have CI open a PR, or move
+image updates to Argo CD Image Updater and drop the scope entirely.
+
+**Third-party actions are pinned to commit SHAs, not tags.** Every `uses:`
+line references a 40-character SHA with the version in a trailing comment.
+A tag like `@v4` is a mutable pointer controlled by someone else, and these
+actions run inside the job with access to its token — `@v4` is a promise that
+the code behind that tag will not change. The SHA is not a promise. The cost
+is that updates no longer arrive silently, which is the intended trade: in a
+real repo Dependabot raises them as reviewable PRs.
+
+**One long-lived credential does still exist**, and it is worth naming rather
+than glossing: my own GitHub account's access to this repository. Nothing in
+the pipeline can be more secure than the account that can rewrite the
+pipeline. In production that is addressed with branch protection, required
+reviews, and enforced SSO/MFA on the org — not with anything inside the
+workflow file.
 
 ### Acting on scan results
 
-**Designed, not built:**
+Layers 1 and 4 are **built**; 2 and 3 are designed.
 
-1. **In the pipeline (blocking).** Trivy runs against the built image before
-   push and **fails the build** on HIGH/CRITICAL with a fix available. This is
-   the only place a block is cheap
+1. **In the pipeline (blocking) — built.** Trivy runs against the built image
+   before push and **fails the build** on HIGH/CRITICAL with a fix available.
+   This is the only place a block is cheap
 2. **In the cluster (detecting).** **Trivy Operator** scans running workloads
    continuously and writes `VulnerabilityReport` CRDs. This catches what the
    pipeline cannot: a CVE disclosed _after_ the image shipped.
@@ -176,9 +207,51 @@ because it never talks to the cluster.
    nobody runs `kubectl get vulnerabilityreports` unprompted. Route them
    outward: metrics scraped to an alert on "critical count > 0 in a running
    workload", or a scheduled job that opens/updates a ticket per finding.
-4. **Blocking deployment of what is already known-bad.** A Kyverno policy
-   refusing images without a passing scan, or unsigned images, closes the gap
-   where something reaches the cluster without passing through CI.
+4. **Manifest misconfiguration (blocking) — built.** A second blocking gate
+   scans `k8s/` for misconfiguration, a failure class the package scanners
+   cannot see at all. It reports to the Security tab as well as failing.
+5. **Blocking deployment of what is already known-bad — designed.** A Kyverno
+   policy refusing images without a passing scan, or unsigned images, closes
+   the gap where something reaches the cluster without passing through CI.
+
+**Two decisions inside the blocking gate that are worth defending.**
+
+*Only fixable findings block.* The gate runs with `ignore-unfixed: true`.
+Blocking on a vulnerability with no available patch does not make anyone
+safer — it makes the pipeline permanently red, and a permanently red pipeline
+gets bypassed. Unfixed findings are still reported in full by the SARIF gate;
+they just do not stop the build.
+
+*Scanning happens before push, not after.* The image is built single-arch and
+loaded into the runner's local Docker, scanned there, and only then rebuilt
+multi-arch and pushed. Scanning after push means a failing image is already
+in the registry and pullable while the pipeline decides whether to fail it.
+
+**This gate has already caught something real.** The base image was originally
+`nginx-unprivileged:1.29.1-alpine`. It carries fixable HIGH/CRITICAL CVEs in
+pcre2, zlib, musl, libxml2 and nghttp2, inherited from an older Alpine layer —
+so the gate rejected it. The fix was to move to `1.30-alpine` (nginx stable),
+which scans clean. That is the gate doing its job rather than a hypothetical.
+
+**Triage, not blanket suppression.** The first run put four misconfiguration
+findings in the Security tab. Each got a decision rather than a bulk ignore:
+
+| Finding | Decision |
+|---|---|
+| `KSV-0020` / `KSV-0021` — UID/GID below 10000 | **Fixed.** Moved the workload to UID 10101. Low UIDs risk colliding with real accounts on the node, so a container escape lands as a host user. Possible here because nginx writes only to `/tmp` (an `emptyDir`, writable by any UID) and reads only world-readable files. |
+| `KSV-0013` — "should specify an image tag" | **Accepted.** The manifest pins by digest, which is strictly stronger than a tag. The rule penalises the safer choice. |
+| `KSV-0125` — "untrusted registry" | **Accepted, with a real fix named.** `ghcr.io` is not in Trivy's default trust list but is this project's own registry. Configuring the trust list is the proper fix and belongs with the ACR work. |
+
+The two accepted findings live in [`.trivyignore.yaml`](.trivyignore.yaml)
+with a written reason and an **expiry date**, not a bare rule ID. The expiry
+is the point: acceptance is temporary by default, and a lapsed entry
+reappears and has to be re-argued. This is the same mechanism the
+[unfixable-CVE process](#the-finding-you-cant-fix) below describes.
+
+With the baseline at zero, the manifest gate was switched from reporting to
+**blocking**. The sequencing matters: get to zero first, then fail on
+regression. A gate turned on over a non-zero baseline just fails constantly
+and teaches people to ignore it.
 
 **What does not roll back automatically, and why.** Automatic rollback on a new
 CVE is a bad default: the CVE is usually in a base-image layer, so the previous
@@ -190,12 +263,13 @@ rebuild-and-redeploy on a patched base, which is forward, not backward.
 
 | Layer                                               | Catches                                                                                                                                   | Misses                                                                      |
 | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| **Build-time image scan** (planned, blocking)       | Vulnerable packages in the image, before it ships. Cheapest place to fix.                                                                 | Anything disclosed after the build. Misconfiguration in how it is deployed. |
-| **Runtime workload scan** (planned, Trivy Operator) | Newly-disclosed CVEs in already-running images; drift between what CI approved and what is actually running.                              | Nothing, until it is already running.                                       |
-| **IaC / manifest scan** (not built — see below)     | `privileged: true`, missing `runAsNonRoot`, no resource limits, a public AKS API server, an unrestricted NSG. Misconfiguration, not CVEs. | Vulnerable packages. Different failure class entirely.                      |
-| **Dependency / SBOM scan** (SBOM planned)           | What is actually in the image, so that when a CVE lands you can answer "are we affected?" in minutes rather than days.                    | Nothing by itself — it is the inventory the other layers query.             |
+| **Build-time image scan** (**built**, blocking)       | Vulnerable packages in the image, before it ships. Cheapest place to fix.                                                                 | Anything disclosed after the build. Misconfiguration in how it is deployed. |
+| **Runtime workload scan** (_designed_, Trivy Operator) | Newly-disclosed CVEs in already-running images; drift between what CI approved and what is actually running.                              | Nothing, until it is already running.                                       |
+| **Manifest scan** (**built**, blocking)     | `privileged: true`, missing `runAsNonRoot`, no resource limits, a public AKS API server, an unrestricted NSG. Misconfiguration, not CVEs. | Vulnerable packages. Different failure class entirely.                      |
+| **SBOM + provenance** (**built**, attested)           | What is actually in the image, so that when a CVE lands you can answer "are we affected?" in minutes rather than days.                    | Nothing by itself — it is the inventory the other layers query.             |
 
-**Skipped deliberately:** infrastructure-code scanning, because there is no
+**Still skipped deliberately:** infrastructure-code scanning of *cloud*
+resources, because there is no
 Terraform in this repo. On a
 real repo this is `checkov`/`tfsec`/`trivy config` in CI against the Terraform,
 failing on a public API server, unencrypted state, or over-broad role
@@ -204,10 +278,20 @@ blind to, and it is the one most often missing.
 
 ### Image hygiene
 
-**Planned:** `nginxinc/nginx-unprivileged:<version>@sha256:...` on Alpine.
+**Built:** `nginxinc/nginx-unprivileged:1.30-alpine@sha256:daa17b94...`
 
 - **Pinned by digest**, for the same reason the kind node image is: a tag is a
-  mutable pointer, and "we deployed `1.29-alpine`" does not identify what ran.
+  mutable pointer, and "we deployed `1.30-alpine`" does not identify what ran.
+- **nginx *stable* (1.30.x), not mainline.** Stable gets security fixes
+  without mainline's feature churn, which is what you want under an image
+  rebuilt on a schedule. This specific version was also chosen because it
+  scans clean — 1.29.x still carries fixable HIGH/CRITICAL CVEs that the
+  pipeline's blocking gate correctly rejects.
+- **Runs as UID 10101**, not the image's own 101. Low UIDs can collide with
+  real accounts on the node, so a container escape lands as a host user
+  rather than as nobody. Raised in response to an actual Trivy finding
+  (`KSV-0020`/`KSV-0021`) rather than by guesswork, and verified to still
+  work under a read-only root filesystem.
 - **Non-root.** Stock `nginx` starts as root to bind port 80 and then drops
   privileges for workers — the master process stays root. The unprivileged
   variant listens on 8080 as a non-root user throughout, so the container needs
