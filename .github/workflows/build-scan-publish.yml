@@ -115,34 +115,39 @@ jobs:
 
       - name: Upload image findings to Security tab
         if: always()
-        uses: github/codeql-action/upload-sarif@ed1a0fa18ac745d017ca370dd4ef08bba3b4f504 # v3
+        uses: github/codeql-action/upload-sarif@d8073367669608af8fbcc5f63dd0a0d52bb90cff # v4
         with:
           sarif_file: trivy-image.sarif
           category: trivy-image
 
       # ---------------------------------------------------------------------
-      # Gate 3 — Kubernetes manifest misconfiguration, non-blocking for now.
+      # Gate 3 — Kubernetes manifest misconfiguration. Blocking.
       #
       # A different failure class entirely from the image scans above: this
       # catches privileged: true, missing runAsNonRoot, absent resource
-      # limits — things no package scanner can see. Non-blocking while the
-      # manifests settle; it should become blocking once the baseline is
-      # clean, otherwise it is just noise.
+      # limits — things no package scanner can see.
+      #
+      # This is blocking because the baseline is clean. A scanner that always
+      # reports something is a scanner people stop reading, so the rule is:
+      # get to zero, then fail on regression. The two findings that remain
+      # wrong-in-context are recorded in .trivyignore.yaml with a reason and
+      # an expiry rather than being silenced by lowering the threshold.
       # ---------------------------------------------------------------------
-      - name: Trivy scan (Kubernetes manifests → SARIF)
+      - name: Trivy scan (Kubernetes manifests, blocking)
         if: always()
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
           scan-type: config
           scan-ref: k8s/
           severity: MEDIUM,HIGH,CRITICAL
-          exit-code: '0'
+          trivyignores: .trivyignore.yaml
+          exit-code: '1'
           format: sarif
           output: trivy-config.sarif
 
       - name: Upload manifest findings to Security tab
         if: always()
-        uses: github/codeql-action/upload-sarif@ed1a0fa18ac745d017ca370dd4ef08bba3b4f504 # v3
+        uses: github/codeql-action/upload-sarif@d8073367669608af8fbcc5f63dd0a0d52bb90cff # v4
         with:
           sarif_file: trivy-config.sarif
           category: trivy-config

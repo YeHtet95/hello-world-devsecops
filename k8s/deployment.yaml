@@ -24,8 +24,18 @@ spec:
       # Pod-level security context
       securityContext:
         runAsNonRoot: true
-        runAsUser: 101
-        runAsGroup: 101
+        # 10101 rather than the image's own UID 101.
+        #
+        # Low UIDs risk colliding with accounts that exist on the host, so a
+        # container escape lands as a real user on the node rather than as
+        # nobody. Trivy flags anything under 10000 (KSV-0020/KSV-0021), and
+        # here the flag is worth acting on rather than suppressing: nginx
+        # only ever writes to /tmp, which is an emptyDir writable by any UID,
+        # and everything it reads — binaries, config, web root — is
+        # world-readable in the image. Verified: the container starts and
+        # serves as 10101 with a read-only root filesystem.
+        runAsUser: 10101
+        runAsGroup: 10101
         seccompProfile:
           # Applies the container runtime's default seccomp filter, which
           # blocks the large majority of syscalls a web server never makes.
