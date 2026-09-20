@@ -1,0 +1,54 @@
+# An AppProject is Argo CD's own least-privilege boundary.
+#
+# Argo CD's default project is called `default` and it is deliberately
+# permissive: any repo, any cluster, any namespace, any resource kind. Most
+# installs never move off it, which means a compromised or careless
+# Application can deploy anything anywhere the controller's ServiceAccount
+# can reach — and by default that is cluster-admin.
+#
+# This project narrows all four axes to what this one application actually
+# needs. It does not replace the controller's RBAC (see the README), but it
+# is the control that stops an Application in *this* project from being used
+# to deploy something unrelated.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: hello-world
+  namespace: argocd
+spec:
+  description: Static hello-world page. Nothing else belongs here.
+
+  # Only this repository. An Application in this project cannot be pointed
+  # at an attacker's repo, or at an internal repo it has no business reading.
+  sourceRepos:
+    - https://github.com/YeHtet95/hello-world-devsecops.git
+
+  # Only this cluster, and only this namespace. Not kube-system, not argocd
+  # itself — which would let an Application rewrite Argo CD's own RBAC.
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: hello-world
+
+  # Cluster-scoped resources this project may manage. The application needs
+  # exactly one: its own Namespace. Everything else cluster-scoped —
+  # ClusterRole, ClusterRoleBinding, ValidatingWebhookConfiguration, CRDs —
+  # is denied by omission, because those are the objects you would target to
+  # escalate privilege.
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+
+  # Namespaced resources, allow-listed rather than deny-listed. A deny-list
+  # is wrong here: it fails open on any resource kind invented after it was
+  # written.
+  namespaceResourceWhitelist:
+    - group: ""
+      kind: ServiceAccount
+    - group: ""
+      kind: Service
+    - group: apps
+      kind: Deployment
+    - group: networking.k8s.io
+      kind: Ingress
+    - group: networking.k8s.io
+      kind: NetworkPolicy

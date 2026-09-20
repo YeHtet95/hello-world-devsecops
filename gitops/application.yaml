@@ -1,0 +1,52 @@
+# The Application: what Argo CD watches, and what it does when reality drifts.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: hello-world
+  namespace: argocd
+  finalizers:
+    # Without this, deleting the Application orphans the workloads it
+    # created — they keep running with nothing managing them.
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: hello-world
+
+  source:
+    repoURL: https://github.com/YeHtet95/hello-world-devsecops.git
+    targetRevision: main
+    path: k8s
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: hello-world
+
+  syncPolicy:
+    automated:
+      # Delete resources removed from Git. Without prune, deleting a manifest
+      # leaves the object running forever and Git stops describing the
+      # cluster — which defeats the point of GitOps.
+      prune: true
+
+      # Revert manual changes made directly against the cluster.
+      #
+      # This is the security-relevant half: someone running `kubectl edit` to
+      # drop a securityContext, or to swap the image for one that never
+      # passed the pipeline's scan gate, is reverted automatically. It makes
+      # Git the only supported way to change what runs, rather than merely
+      # the recommended one.
+      selfHeal: true
+
+    syncOptions:
+      # The Namespace itself is in Git (k8s/namespace.yaml) with its Pod
+      # Security labels, so Argo CD must not create a bare one first.
+      - CreateNamespace=false
+      # Report drift on fields we manage without fighting controllers that
+      # legitimately mutate other fields.
+      - ApplyOutOfSyncOnly=true
+
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m

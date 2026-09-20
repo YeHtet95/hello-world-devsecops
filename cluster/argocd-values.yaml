@@ -1,0 +1,85 @@
+# Argo CD — the pull side of the deployment model.
+#
+# The pipeline pushes an image to GHCR and commits a digest to this
+# repository. Argo CD, running inside the cluster, notices that commit and
+# reconciles. Nothing outside the cluster is given credentials to it.
+#
+# Chart pinned; see cluster/argocd-install.sh for the version.
+
+global:
+  # Modest requests so Argo CD, ingress-nginx and (later) Trivy Operator all
+  # fit in a laptop-sized kind cluster.
+  resources:
+    requests:
+      cpu: 25m
+      memory: 96Mi
+
+configs:
+  params:
+    # Terminate TLS at the ingress instead of in argocd-server.
+    #
+    # Argo CD serves HTTPS with its own self-signed certificate by default,
+    # which means ingress-nginx would have to re-encrypt to a cert it does
+    # not trust. Running the server insecure behind the ingress avoids that.
+    # It is only acceptable because the hop between ingress and server is
+    # inside the cluster — in production this pairs with a NetworkPolicy
+    # restricting who can reach argocd-server directly, and a real
+    # certificate at the edge.
+    server.insecure: true
+
+    # One replica of everything. HA is out of scope for this assessment.
+    controller.replicas: 1
+
+  cm:
+    # Argo CD's UI/API is a cluster-admin-equivalent control plane. In
+    # production this is wired to Entra ID via OIDC and local accounts are
+    # disabled entirely, exactly as for the AKS API server itself. The demo
+    # keeps the local admin account because wiring Entra ID is explicitly
+    # called out in the brief as not worth half a day.
+    #
+    # Turning off anonymous access is not a default worth trusting silently.
+    users.anonymous.enabled: "false"
+
+  # The repository this instance is allowed to deploy from.
+  #
+  # It is public, so Argo CD needs no git credential at all — one fewer
+  # long-lived secret in the cluster. In production against a private repo
+  # this would be a read-only deploy key or a GitHub App installation token,
+  # scoped to this repository only, stored as a Secret in the argocd
+  # namespace and rotated on a schedule.
+  repositories:
+    hello-world:
+      url: https://github.com/YeHtet95/hello-world-devsecops.git
+      name: hello-world
+      type: git
+
+# Components not needed for this demo. Every one removed is a pod that
+# cannot be exploited and a set of RBAC permissions that does not exist.
+notifications:
+  enabled: false
+applicationSet:
+  # NOTE: chart 10.x no longer exposes an `enabled` flag for this component —
+  # setting one is silently ignored, which is worth knowing because it looks
+  # like it worked. Scaling to zero removes the running pod; the Deployment,
+  # ServiceAccount and its RBAC still exist. To remove those you would have
+  # to post-process the rendered manifests. Called out rather than left
+  # looking like a clean disable.
+  replicas: 0
+dex:
+  # Dex brokers external identity providers. With no OIDC provider wired up
+  # it would sit there doing nothing, so it is switched off rather than left
+  # running by default.
+  enabled: false
+
+server:
+  ingress:
+    enabled: true
+    ingressClassName: nginx
+    hostname: argocd.127.0.0.1.nip.io
+    annotations:
+      nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+      # argocd-server is running insecure (see configs.params above), so the
+      # ingress talks plain HTTP to it inside the cluster.
+      nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+    path: /
+    pathType: Prefix

@@ -1,10 +1,7 @@
 # Accepted Trivy findings, with the reason and an expiry date.
 #
 # The point of the expiry is that acceptance is temporary by default. An
-# entry that lapses reappears in the Security tab and has to be re-argued,
-# rather than sitting in a suppression file that silently grows forever.
-# This is the same process described in the README for a CVE with no fix
-# available.
+# entry that lapses reappears in the Security tab.
 #
 # Findings that can be *fixed* are fixed rather than listed here — see
 # KSV-0020/KSV-0021 in k8s/deployment.yaml, which were resolved by moving
@@ -31,7 +28,6 @@ misconfigurations:
       "image from an untrusted registry" — ghcr.io is not in Trivy's default
       trusted-registry list. It is this project's own registry, the image is
       built by this repository's pipeline and pinned by digest. The correct
-      long-term fix is to configure the trusted registry list rather than
-      ignore the rule; doing that properly belongs with the AKS/ACR work,
-      where the registry would be ACR and this entry should be removed.
+      long-term fix is to configure the trusted registry list r; doing that properly belongs with the AKS/ACR work,
+      where the registry would be ACR.
     expired_at: 2027-03-31

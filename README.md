@@ -10,22 +10,22 @@ The application is one HTML file.
 
 ## Status: built vs. designed
 
-| Outcome (brief §2)                          | Status                       | Where                                                                              |
-| ------------------------------------------- | ---------------------------- | ---------------------------------------------------------------------------------- |
-| Local cluster, reproducible from the repo   | **Built**                    | [`cluster/`](cluster/), [`Makefile`](Makefile)                                     |
-| Ingress controller, pinned                  | **Built**                    | [`cluster/ingress-nginx-values.yaml`](cluster/ingress-nginx-values.yaml)           |
-| Page served from an image built             | **Built**                    | [`app/Dockerfile`](app/Dockerfile), [`k8s/`](k8s/)                                 |
-| Workload hardening (non-root, read-only FS) | **Built**                    | [`k8s/deployment.yaml`](k8s/deployment.yaml)                                       |
-| Pod Security Admission (`restricted`)       | **Built**                    | [`k8s/namespace.yaml`](k8s/namespace.yaml)                                         |
-| NetworkPolicy                               | **Written, inert on kind**   | [`k8s/networkpolicy.yaml`](k8s/networkpolicy.yaml)                                 |
-| Pipeline: build, scan, publish to GHCR      | **Built**                    | [`.github/workflows/`](.github/workflows/build-scan-publish.yml)                   |
-| Build-time scan with a blocking threshold   | **Built**                    | same — gates 1 and 3                                                               |
-| Manifest misconfiguration scan (blocking)   | **Built**                    | same, plus [`.trivyignore.yaml`](.trivyignore.yaml)                                |
-| SBOM + provenance attestations              | **Built**                    | same — `sbom: true`, `provenance: mode=max`                                        |
-| Reaches the cluster through automation      | _Half built_                 | CI publishes and commits the digest; Argo CD not yet installed                     |
-| Scheduled vulnerability scanning in-cluster | _Designed, not built_        | [Acting on scan results](#acting-on-scan-results)                                  |
-| Authentication in front of the page         | _Designed, not built_        | [Authentication](#authentication)                                                  |
-| AKS provisioning                            | _Discussion only, by design_ | brief §4                                                                           |
+| Outcome                                     | Status                       | Where                                                                    |
+| ------------------------------------------- | ---------------------------- | ------------------------------------------------------------------------ |
+| Local cluster, reproducible from the repo   | **Built**                    | [`cluster/`](cluster/), [`Makefile`](Makefile)                           |
+| Ingress controller, pinned                  | **Built**                    | [`cluster/ingress-nginx-values.yaml`](cluster/ingress-nginx-values.yaml) |
+| Page served from an image built             | **Built**                    | [`app/Dockerfile`](app/Dockerfile), [`k8s/`](k8s/)                       |
+| Workload hardening (non-root, read-only FS) | **Built**                    | [`k8s/deployment.yaml`](k8s/deployment.yaml)                             |
+| Pod Security Admission (`restricted`)       | **Built**                    | [`k8s/namespace.yaml`](k8s/namespace.yaml)                               |
+| NetworkPolicy                               | **Written, inert on kind**   | [`k8s/networkpolicy.yaml`](k8s/networkpolicy.yaml)                       |
+| Pipeline: build, scan, publish to GHCR      | **Built**                    | [`.github/workflows/`](.github/workflows/build-scan-publish.yml)         |
+| Build-time scan with a blocking threshold   | **Built**                    | same — gates 1 and 3                                                     |
+| Manifest misconfiguration scan (blocking)   | **Built**                    | same, plus [`.trivyignore.yaml`](.trivyignore.yaml)                      |
+| SBOM + provenance attestations              | **Built**                    | same — `sbom: true`, `provenance: mode=max`                              |
+| Reaches the cluster through automation      | _Half built_                 | CI publishes and commits the digest; Argo CD not yet installed           |
+| Scheduled vulnerability scanning in-cluster | _Designed, not built_        | [Acting on scan results](#acting-on-scan-results)                        |
+| Authentication in front of the page         | _Designed, not built_        | [Authentication](#authentication)                                        |
+| AKS provisioning                            | _Discussion only, by design_ |                                                                          |
 
 ---
 
@@ -183,7 +183,7 @@ to this repository; the cluster is what reaches out. There is no kubeconfig,
 no service principal, and no inbound network path to the cluster anywhere
 in CI.
 
-**What the token *can* do, and why.** The job requests three scopes and no
+**What the token _can_ do, and why.** The job requests three scopes and no
 more: `packages: write` to push the image, `security-events: write` to file
 SARIF, and `contents: write` to commit the digest. The workflow's top-level
 default is `contents: read`, so anything added later starts read-only and has
@@ -230,13 +230,13 @@ Layers 1 and 4 are **built**; 2 and 3 are designed.
 
 **Two decisions inside the blocking gate that are worth defending.**
 
-*Only fixable findings block.* The gate runs with `ignore-unfixed: true`.
+_Only fixable findings block._ The gate runs with `ignore-unfixed: true`.
 Blocking on a vulnerability with no available patch does not make anyone
 safer — it makes the pipeline permanently red, and a permanently red pipeline
 gets bypassed. Unfixed findings are still reported in full by the SARIF gate;
 they just do not stop the build.
 
-*Scanning happens before push, not after.* The image is built single-arch and
+_Scanning happens before push, not after._ The image is built single-arch and
 loaded into the runner's local Docker, scanned there, and only then rebuilt
 multi-arch and pushed. Scanning after push means a failing image is already
 in the registry and pullable while the pipeline decides whether to fail it.
@@ -250,11 +250,11 @@ which scans clean. That is the gate doing its job rather than a hypothetical.
 **Triage, not blanket suppression.** The first run put four misconfiguration
 findings in the Security tab. Each got a decision rather than a bulk ignore:
 
-| Finding | Decision |
-|---|---|
+| Finding                                       | Decision                                                                                                                                                                                                                                                                    |
+| --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `KSV-0020` / `KSV-0021` — UID/GID below 10000 | **Fixed.** Moved the workload to UID 10101. Low UIDs risk colliding with real accounts on the node, so a container escape lands as a host user. Possible here because nginx writes only to `/tmp` (an `emptyDir`, writable by any UID) and reads only world-readable files. |
-| `KSV-0013` — "should specify an image tag" | **Accepted.** The manifest pins by digest, which is strictly stronger than a tag. The rule penalises the safer choice. |
-| `KSV-0125` — "untrusted registry" | **Accepted, with a real fix named.** `ghcr.io` is not in Trivy's default trust list but is this project's own registry. Configuring the trust list is the proper fix and belongs with the ACR work. |
+| `KSV-0013` — "should specify an image tag"    | **Accepted.** The manifest pins by digest, which is strictly stronger than a tag. The rule penalises the safer choice.                                                                                                                                                      |
+| `KSV-0125` — "untrusted registry"             | **Accepted, with a real fix named.** `ghcr.io` is not in Trivy's default trust list but is this project's own registry. Configuring the trust list is the proper fix and belongs with the ACR work.                                                                         |
 
 The two accepted findings live in [`.trivyignore.yaml`](.trivyignore.yaml)
 with a written reason and an **expiry date**, not a bare rule ID. The expiry
@@ -275,14 +275,14 @@ rebuild-and-redeploy on a patched base, which is forward, not backward.
 
 ### Scan coverage: what each layer catches that the others miss
 
-| Layer                                               | Catches                                                                                                                                   | Misses                                                                      |
-| --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| **Build-time image scan** (**built**, blocking)       | Vulnerable packages in the image, before it ships. Cheapest place to fix.                                                                 | Anything disclosed after the build. Misconfiguration in how it is deployed. |
+| Layer                                                  | Catches                                                                                                                                   | Misses                                                                      |
+| ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| **Build-time image scan** (**built**, blocking)        | Vulnerable packages in the image, before it ships. Cheapest place to fix.                                                                 | Anything disclosed after the build. Misconfiguration in how it is deployed. |
 | **Runtime workload scan** (_designed_, Trivy Operator) | Newly-disclosed CVEs in already-running images; drift between what CI approved and what is actually running.                              | Nothing, until it is already running.                                       |
-| **Manifest scan** (**built**, blocking)     | `privileged: true`, missing `runAsNonRoot`, no resource limits, a public AKS API server, an unrestricted NSG. Misconfiguration, not CVEs. | Vulnerable packages. Different failure class entirely.                      |
-| **SBOM + provenance** (**built**, attested)           | What is actually in the image, so that when a CVE lands you can answer "are we affected?" in minutes rather than days.                    | Nothing by itself — it is the inventory the other layers query.             |
+| **Manifest scan** (**built**, blocking)                | `privileged: true`, missing `runAsNonRoot`, no resource limits, a public AKS API server, an unrestricted NSG. Misconfiguration, not CVEs. | Vulnerable packages. Different failure class entirely.                      |
+| **SBOM + provenance** (**built**, attested)            | What is actually in the image, so that when a CVE lands you can answer "are we affected?" in minutes rather than days.                    | Nothing by itself — it is the inventory the other layers query.             |
 
-**Still skipped deliberately:** infrastructure-code scanning of *cloud*
+**Still skipped deliberately:** infrastructure-code scanning of _cloud_
 resources, because there is no
 Terraform in this repo. On a
 real repo this is `checkov`/`tfsec`/`trivy config` in CI against the Terraform,
@@ -296,7 +296,7 @@ blind to, and it is the one most often missing.
 
 - **Pinned by digest**, for the same reason the kind node image is: a tag is a
   mutable pointer, and "we deployed `1.30-alpine`" does not identify what ran.
-- **nginx *stable* (1.30.x), not mainline.** Stable gets security fixes
+- **nginx _stable_ (1.30.x), not mainline.** Stable gets security fixes
   without mainline's feature churn, which is what you want under an image
   rebuilt on a schedule. This specific version was also chosen because it
   scans clean — 1.29.x still carries fixable HIGH/CRITICAL CVEs that the
