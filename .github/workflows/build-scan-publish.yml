@@ -1,0 +1,234 @@
+# Build → scan → publish → record the digest.
+#
+# The deliberate shape of this pipeline is that it never talks to the cluster.
+# It ends by committing an image digest to this repository; Argo CD inside the
+# cluster notices the commit and reconciles. That means no kubeconfig, no
+# service principal, and no inbound network path to the cluster exists
+# anywhere in CI. See the README for the alternatives this was weighed against.
+#
+# Every action below is pinned to a commit SHA rather than a tag. Tags on
+# third-party actions are mutable and the action runs with access to this
+# job's token — `@v4` is a promise from someone else that the code behind
+# that tag will not change. The SHA is not.
+name: build-scan-publish
+
+on:
+  push:
+    branches: [main]
+    paths:
+      # Deliberately excludes k8s/** so the digest commit this workflow makes
+      # at the end cannot retrigger it. Belt-and-braces: a commit pushed with
+      # GITHUB_TOKEN does not trigger workflow runs anyway.
+      - 'app/**'
+      - '.github/workflows/build-scan-publish.yml'
+  pull_request:
+    paths:
+      - 'app/**'
+      - '.github/workflows/build-scan-publish.yml'
+  workflow_dispatch:
+
+# Read-only by default; each job widens only what it needs.
+permissions:
+  contents: read
+
+concurrency:
+  # Two runs racing to rewrite the same digest line would produce a confusing
+  # history. Newer wins; the older one is cancelled.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-scan-publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # commit the digest back to k8s/kustomization.yaml
+      packages: write        # push to GHCR
+      security-events: write # upload Trivy findings to the Security tab
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      # ---------------------------------------------------------------------
+      # Build for scanning BEFORE anything is published.
+      #
+      # Single-arch and loaded into the runner's local docker, not pushed.
+      # Scanning after push would mean a vulnerable image is already in the
+      # registry and pullable while the pipeline is deciding whether to fail.
+      # The multi-arch push below reuses this build's cache, so this costs
+      # little.
+      # ---------------------------------------------------------------------
+      - name: Build image for scanning
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ./app
+          platforms: linux/amd64
+          load: true
+          tags: scan-target:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ---------------------------------------------------------------------
+      # Gate 1 — blocking.
+      #
+      # Fails the build on HIGH/CRITICAL that have a fix available. The
+      # --ignore-unfixed equivalent (ignore-unfixed: true) is the important
+      # part: blocking on vulnerabilities with no available patch does not
+      # make anyone safer, it just makes the pipeline permanently red and
+      # trains people to bypass it. Unfixed findings are still reported by
+      # gate 2 below, they simply do not stop the build.
+      # ---------------------------------------------------------------------
+      - name: Trivy scan (blocking — fixable HIGH/CRITICAL)
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: scan-target:${{ github.sha }}
+          scan-type: image
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+          format: table
+
+      # ---------------------------------------------------------------------
+      # Gate 2 — reporting, non-blocking.
+      #
+      # Everything, including unfixed and lower severities, as SARIF into
+      # GitHub code scanning. This is the "results end up somewhere a human
+      # would notice" half: findings appear in the Security tab, attach to
+      # pull requests, and persist — rather than scrolling past in a log.
+      # ---------------------------------------------------------------------
+      - name: Trivy scan (full report → SARIF)
+        if: always()
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: scan-target:${{ github.sha }}
+          scan-type: image
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          ignore-unfixed: false
+          exit-code: '0'
+          format: sarif
+          output: trivy-image.sarif
+
+      - name: Upload image findings to Security tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@ed1a0fa18ac745d017ca370dd4ef08bba3b4f504 # v3
+        with:
+          sarif_file: trivy-image.sarif
+          category: trivy-image
+
+      # ---------------------------------------------------------------------
+      # Gate 3 — Kubernetes manifest misconfiguration, non-blocking for now.
+      #
+      # A different failure class entirely from the image scans above: this
+      # catches privileged: true, missing runAsNonRoot, absent resource
+      # limits — things no package scanner can see. Non-blocking while the
+      # manifests settle; it should become blocking once the baseline is
+      # clean, otherwise it is just noise.
+      # ---------------------------------------------------------------------
+      - name: Trivy scan (Kubernetes manifests → SARIF)
+        if: always()
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          scan-type: config
+          scan-ref: k8s/
+          severity: MEDIUM,HIGH,CRITICAL
+          exit-code: '0'
+          format: sarif
+          output: trivy-config.sarif
+
+      - name: Upload manifest findings to Security tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@ed1a0fa18ac745d017ca370dd4ef08bba3b4f504 # v3
+        with:
+          sarif_file: trivy-config.sarif
+          category: trivy-config
+
+      # ---------------------------------------------------------------------
+      # Publish. Only reached if gate 1 passed.
+      #
+      # Authentication is the job-scoped GITHUB_TOKEN with packages: write.
+      # It is minted for this job, expires when the job ends, and is scoped
+      # to this repository. There is no PAT and no long-lived secret in any
+      # CI variable — which is the point.
+      # ---------------------------------------------------------------------
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive tags and labels
+        if: github.event_name != 'pull_request'
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,format=long
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push (multi-arch)
+        if: github.event_name != 'pull_request'
+        id: push
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ./app
+          # amd64 for AKS node pools, arm64 so the same image runs on an
+          # Apple Silicon laptop's kind cluster. Without arm64 the local
+          # demo silently pulls nothing runnable.
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # Attach an SBOM and build provenance to the image in the registry.
+          # The SBOM is the inventory that makes "are we affected by this new
+          # CVE?" a query rather than an investigation.
+          sbom: true
+          provenance: mode=max
+
+      # ---------------------------------------------------------------------
+      # Record what was published, by digest.
+      #
+      # This is the handoff to Argo CD. Writing the digest rather than a tag
+      # means the deployed artifact is identified exactly: a tag can be
+      # repointed after CI has scanned it, a digest cannot.
+      # ---------------------------------------------------------------------
+      - name: Pin the new digest in k8s/kustomization.yaml
+        if: github.event_name != 'pull_request'
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          test -n "$DIGEST"
+          sed -i -E "s|^(    digest: ).*|\1${DIGEST}|" k8s/kustomization.yaml
+          grep -q "    digest: ${DIGEST}$" k8s/kustomization.yaml
+          git diff --stat k8s/kustomization.yaml
+
+      - name: Commit the digest
+        if: github.event_name != 'pull_request'
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet k8s/kustomization.yaml; then
+            echo "Digest unchanged — nothing to commit."
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add k8s/kustomization.yaml
+          git commit -m "Deploy ${DIGEST}
+
+          Published by ${{ github.workflow }} run ${{ github.run_id }} from
+          ${{ github.sha }}. Image passed the blocking Trivy gate.
+
+          This commit is what Argo CD reconciles against."
+          git push

@@ -10,12 +10,7 @@ metadata:
     # unless the Ingress declares a `tls:` block for the host, which this one
     # deliberately does not — the demo relies on ingress-nginx's self-signed
     # default certificate. Using the plain `ssl-redirect` annotation here
-    # silently serves plaintext, which is exactly the kind of control that
-    # looks present on review and does nothing.
-    #
-    # Browsers will still warn on the self-signed certificate. That is a
-    # certificate *trust* problem, not a transport one, and the brief puts
-    # certificates and DNS out of scope.
+    # silently serves plaintext
     nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
 
     # AUTHENTICATION IS NOT WIRED UP YET. When oauth2-proxy is added, these
@@ -28,8 +23,7 @@ metadata:
     # request is rejected before it ever reaches the pod.
 spec:
   # Set explicitly. The controller is configured with
-  # watchIngressWithoutClass: false, so an Ingress that omits this is simply
-  # not served rather than being silently picked up — fail closed.
+  # watchIngressWithoutClass: false
   ingressClassName: nginx
   rules:
     # nip.io resolves *.127.0.0.1.nip.io to 127.0.0.1 with no hosts-file

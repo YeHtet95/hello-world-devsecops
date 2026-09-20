@@ -16,11 +16,13 @@ resources:
 # The pipeline does not deploy. It builds the image, scans it, pushes it to
 # GHCR, then rewrites the digest below and commits. Argo CD notices the
 # commit and reconciles the cluster to match. The pipeline therefore never
-# holds a cluster credential — see the README.
-#
-# Pinning by digest rather than tag means the running workload is identified
-# exactly: "we deployed :latest" is not an answer to "what is running?", and
-# a mutable tag can be repointed after CI has scanned it.
+# holds a cluster credential
 images:
   - name: ghcr.io/yehtet95/hello-world-devsecops
-    newTag: latest
+    # The pipeline rewrites the digest line below after a successful build and
+    # scan, then commits. Argo CD sees the commit and reconciles. The literal
+    # string `digest: ` at this indent is the rewrite marker — see
+    # .github/workflows/build-scan-publish.yml.
+    #
+    # Placeholder until the first pipeline run publishes a real image.
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000

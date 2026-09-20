@@ -1,7 +1,5 @@
-# Base image pinned by digest, not just tag. `1.29.1-alpine` is a mutable
-# pointer — the digest is not, so the image CI builds today is the image a
-# reviewer builds next week. Bumping this is a deliberate one-line PR that
-# re-runs every scan in the pipeline.
+# Base image pinned by digest, not just tag. `1.30-alpine` is a mutable
+# pointer — the digest is not
 #
 # nginx-unprivileged rather than stock nginx: the stock image starts its
 # master process as root to bind port 80, then drops privileges only for
@@ -11,12 +9,19 @@
 # on 443 regardless, so binding a privileged port inside the container
 # would buy nothing.
 #
-# Alpine over Debian for a smaller package surface — fewer installed
-# packages is fewer CVEs to triage for something serving one static file.
-FROM nginxinc/nginx-unprivileged:1.29.1-alpine@sha256:27985295bdb22a1ef8f712863210bd5877c0f3006494a593e86b3fe0fa55467e
+# Alpine over Debian for a smaller package surface 
+# Version choice: the nginx *stable* branch (1.30.x), not mainline. Stable
+# receives security fixes without mainline's feature churn, which is what you
+# want under an image that is rebuilt on a schedule.
+#
+# This specific tag was chosen because it scans clean: 1.29.x currently
+# carries fixable HIGH/CRITICAL CVEs in pcre2, zlib, musl, libxml2 and
+# nghttp2 inherited from its older Alpine layer, and the pipeline's blocking
+# gate rejects exactly those. Verified with Trivy before committing rather
+# than discovered by a red build.
+FROM nginxinc/nginx-unprivileged:1.30-alpine@sha256:daa17b944bac2b578e962da4c61ad72a59233b3c63abea17113acaf4e6b9aea4
 
-# Links the GHCR package back to this repository, and gives scanners and
-# `docker inspect` provenance to work from.
+# Links the GHCR package back to this repository
 LABEL org.opencontainers.image.source="https://github.com/YeHtet95/hello-world-devsecops" \
       org.opencontainers.image.description="Static hello-world page served by nginx" \
       org.opencontainers.image.licenses="MIT"
@@ -24,9 +29,6 @@ LABEL org.opencontainers.image.source="https://github.com/YeHtet95/hello-world-d
 COPY nginx-hardening.conf /etc/nginx/conf.d/hardening.conf
 COPY site/ /usr/share/nginx/html/
 
-# Documentation only — the port the base image already listens on as UID 101.
 EXPOSE 8080
 
-# Inherited from the base image, restated so it is visible at review time
-# rather than requiring someone to go and read the base image's Dockerfile.
 USER 101

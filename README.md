@@ -14,18 +14,14 @@ The application is one HTML file.
 | ------------------------------------------- | ---------------------------- | ---------------------------------------------------------------------------------- |
 | Local cluster, reproducible from the repo   | **Built**                    | [`cluster/`](cluster/), [`Makefile`](Makefile)                                     |
 | Ingress controller, pinned                  | **Built**                    | [`cluster/ingress-nginx-values.yaml`](cluster/ingress-nginx-values.yaml)           |
-| Page served from an image I built           | **Built**                    | [`app/Dockerfile`](app/Dockerfile), [`k8s/`](k8s/)                                 |
+| Page served from an image built             | **Built**                    | [`app/Dockerfile`](app/Dockerfile), [`k8s/`](k8s/)                                 |
 | Workload hardening (non-root, read-only FS) | **Built**                    | [`k8s/deployment.yaml`](k8s/deployment.yaml)                                       |
 | Pod Security Admission (`restricted`)       | **Built**                    | [`k8s/namespace.yaml`](k8s/namespace.yaml)                                         |
 | NetworkPolicy                               | **Written, inert on kind**   | [`k8s/networkpolicy.yaml`](k8s/networkpolicy.yaml)                                 |
-| Everything in Git                           | **Built**                    | this repo                                                                          |
 | Reaches the cluster through automation      | _Designed, not built_        | [Deployment model](#deployment-model-the-pipeline-never-holds-cluster-credentials) |
 | Scheduled vulnerability scanning in-cluster | _Designed, not built_        | [Acting on scan results](#acting-on-scan-results)                                  |
 | Authentication in front of the page         | _Designed, not built_        | [Authentication](#authentication)                                                  |
 | AKS provisioning                            | _Discussion only, by design_ | brief §4                                                                           |
-
-Sections below marked **Designed** describe what I would build and why. They
-are reasoning, not a description of running code.
 
 ---
 
@@ -63,10 +59,6 @@ kind load docker-image ghcr.io/yehtet95/hello-world-devsecops:dev --name hello-w
 kubectl apply -k k8s/
 ```
 
-This is **not** the deployment path being demoed — per the brief, manual
-`kubectl` is for iteration only. The demo path is CI → GHCR → Argo CD, which
-is not yet built.
-
 Then: <https://hello.127.0.0.1.nip.io:8443/> (self-signed certificate, so
 expect a browser warning).
 
@@ -74,20 +66,18 @@ expect a browser warning).
 
 Each of these was checked against the running cluster, not assumed:
 
-| Check | Result |
-|---|---|
-| Page served over HTTPS through the ingress | `HTTP 200` |
-| Plain HTTP | `HTTP 308` redirect to HTTPS |
-| Container user | `uid=101(nginx)` — not root |
-| Write to web root (`/usr/share/nginx/html`) | `Read-only file system` |
-| Write to `/tmp` | permitted — the one writable path, an `emptyDir` capped at 16Mi |
-| ServiceAccount token inside the pod | `No such file or directory` — not mounted |
-| Pod Security Admission | a non-compliant test pod was **rejected by the API server** |
-| nginx version disclosure | no `Server` version header in responses |
+| Check                                       | Result                                                          |
+| ------------------------------------------- | --------------------------------------------------------------- |
+| Page served over HTTPS through the ingress  | `HTTP 200`                                                      |
+| Plain HTTP                                  | `HTTP 308` redirect to HTTPS                                    |
+| Container user                              | `uid=101(nginx)` — not root                                     |
+| Write to web root (`/usr/share/nginx/html`) | `Read-only file system`                                         |
+| Write to `/tmp`                             | permitted — the one writable path, an `emptyDir` capped at 16Mi |
+| ServiceAccount token inside the pod         | `No such file or directory` — not mounted                       |
+| Pod Security Admission                      | a non-compliant test pod was **rejected by the API server**     |
+| nginx version disclosure                    | no `Server` version header in responses                         |
 
-The Pod Security Admission check is the one worth reproducing at the showcase,
-because it proves the control is an admission decision rather than a
-convention:
+The Pod Security Admission check:
 
 ```console
 $ kubectl -n hello-world run psa-test --image=curlimages/curl:8.11.1 --command -- sleep 30
@@ -99,10 +89,7 @@ unrestricted capabilities, runAsNonRoot != true, seccompProfile
 **What is not verified: the NetworkPolicies.** kind's default CNI (kindnet)
 does not implement NetworkPolicy, so the objects in
 [`k8s/networkpolicy.yaml`](k8s/networkpolicy.yaml) are accepted by the API
-server and enforce nothing locally. They are correct as written and would be
-enforced on AKS with Azure CNI or Calico. I have left them in the repo with
-that caveat stated in the file itself, because a policy that silently does
-nothing is worse than none — it reads as coverage on review and provides zero.
+server and enforce nothing locally.
 Enforcing them locally would mean recreating the cluster with
 `disableDefaultCNI: true` and installing Calico.
 
@@ -134,14 +121,9 @@ Screenshots in [`docs/evidence/`](docs/evidence/).
                               :8443 (host)
 ```
 
-Nothing reaches inward. That is deliberate and is the answer to several of the
-questions below at once.
-
 ---
 
 ## Decisions, and what they were weighed against
-
-### Local cluster: kind, on Docker Desktop
 
 ### Kubernetes version: pinned, and chosen to match AKS
 
@@ -166,7 +148,7 @@ the cluster pulls and reconciles**.
 
 ---
 
-## Security expectations (brief §3)
+## Security expectations
 
 ### Pipeline credentials
 
@@ -214,15 +196,11 @@ rebuild-and-redeploy on a patched base, which is forward, not backward.
 | **Dependency / SBOM scan** (SBOM planned)           | What is actually in the image, so that when a CVE lands you can answer "are we affected?" in minutes rather than days.                    | Nothing by itself — it is the inventory the other layers query.             |
 
 **Skipped deliberately:** infrastructure-code scanning, because there is no
-Terraform in this submission (brief §4 puts provisioning in the showcase). On a
+Terraform in this repo. On a
 real repo this is `checkov`/`tfsec`/`trivy config` in CI against the Terraform,
 failing on a public API server, unencrypted state, or over-broad role
 assignment. It is the layer that catches an entire class the image scanners are
 blind to, and it is the one most often missing.
-
-**Also skipped:** secret scanning in the repo, and admission-time policy. Both
-are in the bonus list; if I had another two hours, admission policy via Kyverno
-is what I would add, because it is what makes the other layers non-optional.
 
 ### Image hygiene
 
@@ -245,14 +223,10 @@ is what I would add, because it is what makes the other layers non-optional.
 **In the cluster.** The workload serves a static file. It needs no Kubernetes
 API access at all: `automountServiceAccountToken: false`, its own
 ServiceAccount with no RoleBindings, no Secrets mounted, and a NetworkPolicy
-allowing ingress only from the ingress-nginx namespace and denying egress
-(it has nowhere legitimate to call). Without that, a compromised pod has a
-mounted token and unrestricted lateral network access by default — flat pod
-networking is the default in Kubernetes and in AKS.
+allowing ingress only from the ingress-nginx namespace and denying egress.
 
-Argo CD is the higher-value target here: it holds cluster-write by design. It
-should be scoped per-namespace rather than cluster-admin, which is the default
-most installs never change.
+Argo CD holds cluster-write by design. It
+should be scoped per-namespace rather than cluster-admin, which is the default.
 
 **In Azure.** The cluster's kubelet identity needs `AcrPull` on the registry
 and nothing else — not `Contributor` on the resource group, which is the
@@ -267,8 +241,7 @@ A critical CVE in the nginx base image with no patch available is the normal
 case, not the exception, and the first move is not technical: establish whether
 it is reachable. A critical in a library that ships in the image but is never
 loaded by a process serving static files is a different problem from one in the
-request path. Most "criticals" in a base image are the former, and treating
-them identically is how teams end up ignoring the scanner entirely.
+request path.
 
 The process I would run:
 
@@ -285,9 +258,6 @@ The process I would run:
 4. **Watch for the fix.** The exception expiry forces the re-check. When the
    upstream patch lands, the rebuild is routine because the base image is
    pinned and bumping it is a one-line PR that re-runs every scan layer.
-
-The failure mode to avoid is a permanent suppression with no owner. That is how
-a scanner stops being a control and becomes a report nobody reads.
 
 ### Authentication
 
@@ -327,5 +297,3 @@ the workload restriction above matters independently.
 
 - Pipeline (GitHub Actions), Argo CD, Trivy Operator and oauth2-proxy are not
   yet built.
-- Evidence (`docs/evidence/`) to be captured once the full path is running.
-- Repository is not yet initialised as Git.
