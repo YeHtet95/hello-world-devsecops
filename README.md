@@ -10,24 +10,24 @@ The application is one HTML file.
 
 ## Status: built vs. designed
 
-| Outcome                                     | Status                       | Where                                                                            |
-| ------------------------------------------- | ---------------------------- | -------------------------------------------------------------------------------- |
-| Local cluster, reproducible from the repo   | **Built**                    | [`cluster/`](cluster/), [`Makefile`](Makefile)                                   |
-| Ingress controller, pinned                  | **Built**                    | [`cluster/ingress-nginx-values.yaml`](cluster/ingress-nginx-values.yaml)         |
-| Page served from an image built             | **Built**                    | [`app/Dockerfile`](app/Dockerfile), [`k8s/`](k8s/)                               |
-| Workload hardening (non-root, read-only FS) | **Built**                    | [`k8s/deployment.yaml`](k8s/deployment.yaml)                                     |
-| Pod Security Admission (`restricted`)       | **Built**                    | [`k8s/namespace.yaml`](k8s/namespace.yaml)                                       |
-| NetworkPolicy                               | **Written, inert on kind**   | [`k8s/networkpolicy.yaml`](k8s/networkpolicy.yaml)                               |
-| Pipeline: build, scan, publish to GHCR      | **Built**                    | [`.github/workflows/`](.github/workflows/build-scan-publish.yml)                 |
-| Build-time scan with a blocking threshold   | **Built**                    | same — gates 1 and 3                                                             |
-| Manifest misconfiguration scan (blocking)   | **Built**                    | same, plus [`.trivyignore.yaml`](.trivyignore.yaml)                              |
-| SBOM + provenance attestations              | **Built**                    | same — `sbom: true`, `provenance: mode=max`                                      |
-| Reaches the cluster through automation      | **Built**                    | [`gitops/`](gitops/), [`cluster/argocd-values.yaml`](cluster/argocd-values.yaml) |
-| Argo CD controller scoped off cluster-admin | **Built**                    | [`cluster/argocd-values.yaml`](cluster/argocd-values.yaml)                       |
-| Scheduled vulnerability scanning in-cluster | **Built**                    | [`cluster/trivy-operator-values.yaml`](cluster/trivy-operator-values.yaml)      |
+| Outcome                                     | Status                       | Where                                                                              |
+| ------------------------------------------- | ---------------------------- | ---------------------------------------------------------------------------------- |
+| Local cluster, reproducible from the repo   | **Built**                    | [`cluster/`](cluster/), [`Makefile`](Makefile)                                     |
+| Ingress controller, pinned                  | **Built**                    | [`cluster/ingress-nginx-values.yaml`](cluster/ingress-nginx-values.yaml)           |
+| Page served from an image built             | **Built**                    | [`app/Dockerfile`](app/Dockerfile), [`k8s/`](k8s/)                                 |
+| Workload hardening (non-root, read-only FS) | **Built**                    | [`k8s/deployment.yaml`](k8s/deployment.yaml)                                       |
+| Pod Security Admission (`restricted`)       | **Built**                    | [`k8s/namespace.yaml`](k8s/namespace.yaml)                                         |
+| NetworkPolicy                               | **Written, inert on kind**   | [`k8s/networkpolicy.yaml`](k8s/networkpolicy.yaml)                                 |
+| Pipeline: build, scan, publish to GHCR      | **Built**                    | [`.github/workflows/`](.github/workflows/build-scan-publish.yml)                   |
+| Build-time scan with a blocking threshold   | **Built**                    | same — gates 1 and 3                                                               |
+| Manifest misconfiguration scan (blocking)   | **Built**                    | same, plus [`.trivyignore.yaml`](.trivyignore.yaml)                                |
+| SBOM + provenance attestations              | **Built**                    | same — `sbom: true`, `provenance: mode=max`                                        |
+| Reaches the cluster through automation      | **Built**                    | [`gitops/`](gitops/), [`cluster/argocd-values.yaml`](cluster/argocd-values.yaml)   |
+| Argo CD controller scoped off cluster-admin | **Built**                    | [`cluster/argocd-values.yaml`](cluster/argocd-values.yaml)                         |
+| Scheduled vulnerability scanning in-cluster | **Built**                    | [`cluster/trivy-operator-values.yaml`](cluster/trivy-operator-values.yaml)         |
 | Scan results reaching a human               | **Built**                    | [`k8s-security/vulnerability-digest.yaml`](k8s-security/vulnerability-digest.yaml) |
-| Authentication in front of the page         | **Built**                    | [`k8s/oauth2-proxy.yaml`](k8s/oauth2-proxy.yaml)                                |
-| AKS provisioning                            | _Discussion only, by design_ |                                                                                  |
+| Authentication in front of the page         | **Built**                    | [`k8s/oauth2-proxy.yaml`](k8s/oauth2-proxy.yaml)                                   |
+| AKS provisioning                            | _Discussion only, by design_ |                                                                                    |
 
 ---
 
@@ -80,8 +80,7 @@ ghcr.io/yehtet95/hello-world-devsecops@sha256:32816991ff35…
 
 Argo CD is installed by `make argocd && make gitops`. Its UI is at
 <https://argocd.127.0.0.1.nip.io:8443/>; `make argocd-password` reads the
-generated admin password out of the cluster. That password is deliberately
-not in this repo and not in any manifest.
+generated admin password out of the cluster.
 
 Scheduled scanning is `make trivy-operator`. `make digest` runs the
 vulnerability digest immediately instead of waiting for 08:00.
@@ -98,7 +97,7 @@ kubectl -n hello-world create secret generic oauth2-proxy \
 ```
 
 Change `--github-user` in [`k8s/oauth2-proxy.yaml`](k8s/oauth2-proxy.yaml) to
-your own GitHub username, or nobody will be able to log in.
+your own GitHub username
 
 ### Verified working
 
@@ -184,11 +183,6 @@ git push
   → https://hello.127.0.0.1.nip.io:8443/ serves the new page
 ```
 
-Argo CD also holds **no git credential**, because the repo is public — one
-fewer long-lived secret in the cluster. Against a private repo this would be
-a read-only deploy key or GitHub App installation token scoped to this
-repository alone.
-
 **`selfHeal` is the part that is a security control, not just convenience.**
 It reverts changes made directly against the cluster, so `kubectl edit` to
 drop a `securityContext` — or to swap in an image that never passed the scan
@@ -229,18 +223,6 @@ to ask.
 
 **Third-party actions are pinned to commit SHAs, not tags.** Every `uses:`
 line references a 40-character SHA with the version in a trailing comment.
-A tag like `@v4` is a mutable pointer controlled by someone else, and these
-actions run inside the job with access to its token — `@v4` is a promise that
-the code behind that tag will not change. The SHA is not a promise. The cost
-is that updates no longer arrive silently, which is the intended trade: in a
-real repo Dependabot raises them as reviewable PRs.
-
-**One long-lived credential does still exist**, and it is worth naming rather
-than glossing: my own GitHub account's access to this repository. Nothing in
-the pipeline can be more secure than the account that can rewrite the
-pipeline. In production that is addressed with branch protection, required
-reviews, and enforced SSO/MFA on the org — not with anything inside the
-workflow file.
 
 ### Acting on scan results
 
@@ -248,96 +230,21 @@ Layers 1 and 4 are **built**; 2 and 3 are designed.
 
 1. **In the pipeline (blocking) — built.** Trivy runs against the built image
    before push and **fails the build** on HIGH/CRITICAL with a fix available.
-   This is the only place a block is cheap
 2. **In the cluster (detecting) — built.** **Trivy Operator** scans running
    workloads on a schedule and writes `VulnerabilityReport`,
    `ConfigAuditReport` and `ExposedSecretReport` CRDs. This catches what the
    pipeline cannot: a CVE disclosed _after_ the image shipped. It watches only
-   the application namespace — scanning everything on a laptop produces a wall
-   of findings about components we did not build and have nowhere to route.
-3. **Getting it to a human — built.** The reports are CRDs, so they are
-   queryable — but nobody runs `kubectl get vulnerabilityreports` unprompted,
-   and a finding that appears at 2am on a Sunday sits there until someone
-   happens to look. [`vulnerability-digest`](k8s-security/vulnerability-digest.yaml)
-   is the delivery path: a CronJob that reads the reports, names the specific
-   CVEs and their fix versions, and then does three things.
+   the application namespace
 
-   - **Emits a Kubernetes Event**, so the finding appears in
-     `kubectl get events` and in the Argo CD UI next to the workload.
-   - **POSTs to a webhook** if one is configured — the hook for Slack, Teams
-     or Azure Monitor. If delivery *fails*, the job fails too, so a broken
-     notification path cannot silently swallow a finding.
-   - **Exits non-zero when criticals are present**, so the Job shows as
-     Failed. That matters more than it sounds: a failed Job is something
-     existing alerting already watches, so this works before anyone has built
-     a bespoke dashboard.
-
-   Its own RBAC is read-only on the three report kinds in one namespace, with
-   event-creation split into a separate narrower binding. It cannot read
-   Secrets or write to any workload.
-
-   **Verified against a real vulnerability, not a hypothetical.** Deploying
-   `nginx-unprivileged:1.29.1-alpine` — the base the pipeline gate rejected
-   earlier — as a canary produced this within about 30 seconds:
-
-   ```console
-   == Trivy digest ==
-   namespace=hello-world workloads=2 critical=3 high=19 misconfig=0 exposed-secrets=0
-     CRITICAL CVE-2025-58050 pcre2       10.43-r1 -> 10.46-r0
-     CRITICAL CVE-2026-31789 libcrypto3  3.5.4-r0 -> 3.5.6-r0
-     CRITICAL CVE-2026-31789 libssl3     3.5.4-r0 -> 3.5.6-r0
-   event: Warning/CriticalVulnerabilitiesFound recorded
-   FAILING JOB: actionable findings present
-   ```
-
-   **Deliberately not built:** deduplication and suppression of findings
-   already triaged. Without it a daily digest eventually becomes noise people
-   filter, which is the failure mode this whole section is trying to avoid.
-4. **Manifest misconfiguration (blocking) — built.** A second blocking gate
+3. **Manifest misconfiguration (blocking) — built.** A second blocking gate
    scans `k8s/` for misconfiguration, a failure class the package scanners
    cannot see at all. It reports to the Security tab as well as failing.
-5. **Blocking deployment of what is already known-bad — designed.** A Kyverno
-   policy refusing images without a passing scan, or unsigned images, closes
-   the gap where something reaches the cluster without passing through CI.
 
 **Two decisions inside the blocking gate that are worth defending.**
 
 _Only fixable findings block._ The gate runs with `ignore-unfixed: true`.
-Blocking on a vulnerability with no available patch does not make anyone
-safer — it makes the pipeline permanently red, and a permanently red pipeline
-gets bypassed. Unfixed findings are still reported in full by the SARIF gate;
-they just do not stop the build.
 
-_Scanning happens before push, not after._ The image is built single-arch and
-loaded into the runner's local Docker, scanned there, and only then rebuilt
-multi-arch and pushed. Scanning after push means a failing image is already
-in the registry and pullable while the pipeline decides whether to fail it.
-
-**This gate has already caught something real.** The base image was originally
-`nginx-unprivileged:1.29.1-alpine`. It carries fixable HIGH/CRITICAL CVEs in
-pcre2, zlib, musl, libxml2 and nghttp2, inherited from an older Alpine layer —
-so the gate rejected it. The fix was to move to `1.30-alpine` (nginx stable),
-which scans clean. That is the gate doing its job rather than a hypothetical.
-
-**Triage, not blanket suppression.** The first run put four misconfiguration
-findings in the Security tab. Each got a decision rather than a bulk ignore:
-
-| Finding                                       | Decision                                                                                                                                                                                                                                                                    |
-| --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `KSV-0020` / `KSV-0021` — UID/GID below 10000 | **Fixed.** Moved the workload to UID 10101. Low UIDs risk colliding with real accounts on the node, so a container escape lands as a host user. Possible here because nginx writes only to `/tmp` (an `emptyDir`, writable by any UID) and reads only world-readable files. |
-| `KSV-0013` — "should specify an image tag"    | **Accepted.** The manifest pins by digest, which is strictly stronger than a tag. The rule penalises the safer choice.                                                                                                                                                      |
-| `KSV-0125` — "untrusted registry"             | **Accepted, with a real fix named.** `ghcr.io` is not in Trivy's default trust list but is this project's own registry. Configuring the trust list is the proper fix and belongs with the ACR work.                                                                         |
-
-The two accepted findings live in [`.trivyignore.yaml`](.trivyignore.yaml)
-with a written reason and an **expiry date**, not a bare rule ID. The expiry
-is the point: acceptance is temporary by default, and a lapsed entry
-reappears and has to be re-argued. This is the same mechanism the
-[unfixable-CVE process](#the-finding-you-cant-fix) below describes.
-
-With the baseline at zero, the manifest gate was switched from reporting to
-**blocking**. The sequencing matters: get to zero first, then fail on
-regression. A gate turned on over a non-zero baseline just fails constantly
-and teaches people to ignore it.
+\_Scanning happens before push, not after.
 
 **What does not roll back automatically, and why.** Automatic rollback on a new
 CVE is a bad default: the CVE is usually in a base-image layer, so the previous
@@ -347,12 +254,12 @@ rebuild-and-redeploy on a patched base, which is forward, not backward.
 
 ### Scan coverage: what each layer catches that the others miss
 
-| Layer                                                  | Catches                                                                                                                                   | Misses                                                                      |
-| ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| **Build-time image scan** (**built**, blocking)        | Vulnerable packages in the image, before it ships. Cheapest place to fix.                                                                 | Anything disclosed after the build. Misconfiguration in how it is deployed. |
+| Layer                                                 | Catches                                                                                                                                   | Misses                                                                      |
+| ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| **Build-time image scan** (**built**, blocking)       | Vulnerable packages in the image, before it ships. Cheapest place to fix.                                                                 | Anything disclosed after the build. Misconfiguration in how it is deployed. |
 | **Runtime workload scan** (**built**, Trivy Operator) | Newly-disclosed CVEs in already-running images; drift between what CI approved and what is actually running.                              | Nothing, until it is already running.                                       |
-| **Manifest scan** (**built**, blocking)                | `privileged: true`, missing `runAsNonRoot`, no resource limits, a public AKS API server, an unrestricted NSG. Misconfiguration, not CVEs. | Vulnerable packages. Different failure class entirely.                      |
-| **SBOM + provenance** (**built**, attested)            | What is actually in the image, so that when a CVE lands you can answer "are we affected?" in minutes rather than days.                    | Nothing by itself — it is the inventory the other layers query.             |
+| **Manifest scan** (**built**, blocking)               | `privileged: true`, missing `runAsNonRoot`, no resource limits, a public AKS API server, an unrestricted NSG. Misconfiguration, not CVEs. | Vulnerable packages. Different failure class entirely.                      |
+| **SBOM + provenance** (**built**, attested)           | What is actually in the image, so that when a CVE lands you can answer "are we affected?" in minutes rather than days.                    | Nothing by itself — it is the inventory the other layers query.             |
 
 **Still skipped deliberately:** infrastructure-code scanning of _cloud_
 resources, because there is no
@@ -466,34 +373,6 @@ everybody has a copy of. Local accounts on the AKS cluster disabled.
 
 ### The finding you can't fix
 
-**This stopped being hypothetical during the build.** Within an hour of
-installing Trivy Operator, it flagged the component added to *enforce
-authentication* as the most vulnerable workload in the namespace:
-oauth2-proxy v7.13.0, 4 critical and 14 high — two of them
-(`CVE-2026-34457`, `CVE-2026-40575`) in oauth2-proxy's own code.
-
-Two things worth drawing out:
-
-*The build pipeline structurally could not have caught this.* oauth2-proxy is
-pulled from a third party and never passes through our CI, so no build-time
-gate ever looks at it. Every image scanner in the pipeline is aimed at the
-one image we build. This is precisely the gap the in-cluster scanner exists
-to cover, and it covered it immediately.
-
-*I made the mistake the pipeline is designed to prevent.* I pinned v7.13.0
-without scanning it first, having just built a whole apparatus for exactly
-that check. The control worked where the human did not, which is the argument
-for having the control.
-
-Upgrading to v7.15.3 cleared the criticals. What remains is the genuinely
-unfixable part: ~15 fixable-in-principle HIGH findings in transitive Go
-dependencies — `grpc`, `golang.org/x/net`, the Go stdlib. "Fixed version:
-1.25.9" is true of the library and useless to me: I cannot rebuild someone
-else's Go binary. Only upstream can, by recompiling against a newer
-toolchain. So this is the real case, and the process below is what it gets.
-
----
-
 A critical CVE in the nginx base image with no patch available is the normal
 case, not the exception, and the first move is not technical: establish whether
 it is reachable. A critical in a library that ships in the image but is never
@@ -523,10 +402,7 @@ enforced at the ingress so an anonymous request never reaches the pod.
 
 ingress-nginx issues an `auth-url` subrequest to oauth2-proxy before
 proxying anything. A 401 means the request is never forwarded and the
-visitor is redirected to GitHub instead. The static page contains no auth
-code at all — the thing serving content is not the thing deciding who may
-see it, which also means the auth layer can be replaced without touching
-the application.
+visitor is redirected to GitHub instead.
 
 Verified:
 
@@ -539,46 +415,6 @@ $ curl -skL --max-redirs 5 -o /dev/null -w '%{url_effective}' https://hello.127.
 https://github.com/login?client_id=…&return_to=%2Flogin%2Foauth%2Fauthorize…
 ```
 
-**`--github-user` is the line that matters.** Without an allow-list, "log in
-with GitHub" means *any* GitHub account on earth can read the page — that is
-authentication with no authorisation, and worse than no gate at all because
-it looks protected. Access is restricted to a named account.
-
-**A second Ingress exposes `/oauth2` without auth annotations**, because the
-OAuth callback has to be reachable for the redirect to complete. Getting this
-wrong produces an infinite login loop rather than a visible failure, which is
-why it is a separate object rather than a path exception buried in the main
-Ingress.
-
-**Secrets.** The client ID, client secret and cookie secret are a Kubernetes
-Secret created out-of-band and deliberately not in this repository. A
-Kubernetes Secret is base64, not encryption — anyone with `get secret` in
-this namespace, or with cluster-wide RBAC, can read it. On AKS this would
-come from Key Vault via the Secrets Store CSI driver, so the credential is
-never a Kubernetes object at all, with rotation handled in Key Vault rather
-than by redeploying.
-
-**What the demo would not protect against, and production would.** A demo
-oauth2-proxy with a GitHub OAuth app proves the request path is gated; it does
-not give real identity governance. In production this is Entra ID, so access is
-granted by group membership, revoked centrally on offboarding, subject to
-conditional access and MFA, and audited. The demo also relies on a self-signed
-certificate and `nip.io`; production terminates TLS on a real certificate.
-
-Authentication at the ingress is also not a substitute for NetworkPolicy —
-anything already inside the cluster can reach the pod's ClusterIP directly
-and bypass this entirely, which is why the workload restriction matters
-independently. On kind that NetworkPolicy is inert, so on this cluster the
-bypass is real and not theoretical.
-
-**oauth2-proxy is the one workload here that needs egress**, and it got its
-own NetworkPolicy rather than a relaxation of the namespace default-deny. It
-is allowed DNS and 443 outbound, with private ranges excluded — including
-`169.254.0.0/16`, because the cloud metadata endpoint is the standard pivot
-from "this pod can make outbound requests" to "this pod has cloud
-credentials". On AKS this would sit behind an egress firewall with an FQDN
-allow-list instead of a CIDR block.
-
 ---
 
 ## What I'd do differently for production
@@ -586,8 +422,7 @@ allow-list instead of a CIDR block.
 - **Terraform for the AKS cluster**, with the security-relevant decisions in
   review: private API server, Entra-integrated RBAC with local accounts
   disabled, `AcrPull` via kubelet identity, Workload Identity for pods, and
-  network exposure through a single ingress. Provisioning is a showcase
-  conversation per brief §4.
+  network exposure through a single ingress.
 - **Admission policy (Kyverno)** enforcing signed images, non-root, no
   `:latest`, resource limits — so the controls are not merely conventions the
   next person can skip.
@@ -596,15 +431,3 @@ allow-list instead of a CIDR block.
 - **Alerting on scan results** wired to wherever the team actually looks, and
   an SLA per severity rather than a dashboard.
 - **Argo CD scoped per-namespace**, not cluster-admin.
-
-## Open items
-
-- Every outcome in the brief's section 2 is now built. What remains are the
-  gaps named inline above: NetworkPolicies are inert on kind, `argocd-server`
-  runs its default ClusterRole, the Argo CD initial admin account still
-  exists, and the digest job has no finding deduplication.
-- `argocd-server` still runs on its default ClusterRole, and the Argo CD
-  initial admin account still exists. Both are noted under
-  [least privilege](#least-privilege).
-- The blocking thresholds — HIGH/CRITICAL for images, MEDIUM and above for
-  manifests — are a judgement call, not a standard.
