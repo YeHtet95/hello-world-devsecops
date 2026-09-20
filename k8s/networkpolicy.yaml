@@ -1,0 +1,62 @@
+# NOTE ON THE LOCAL DEMO: kind's default CNI (kindnet) does not implement
+# NetworkPolicy. These objects are accepted by the API server and are
+# completely inert on the kind cluster — they are declarative intent here,
+# not an enforced control. Saying so explicitly because a NetworkPolicy that
+# silently does nothing is worse than no NetworkPolicy: it looks like
+# coverage on a review and provides none.
+#
+# On AKS with Azure CNI (or Calico) these are enforced as written. To
+# enforce them locally, kind would need to be created with
+# `disableDefaultCNI: true` and Calico installed in place of kindnet.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: hello-world
+spec:
+  # Empty selector = every pod in the namespace.
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  # No rules at all: deny everything in both directions, then add back only
+  # what is needed below. Kubernetes pod networking is flat and unrestricted
+  # by default — any pod in the cluster can reach any other pod. Without a
+  # default-deny, a compromised workload elsewhere in the cluster can talk
+  # to this one directly, bypassing the ingress and its authentication.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-controller
+  namespace: hello-world
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: hello-world
+  policyTypes:
+    - Ingress
+  ingress:
+    # The only legitimate source of traffic is the ingress controller, which
+    # is where authentication is enforced. Nothing else in the cluster has
+    # any business reaching this pod.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - port: 8080
+          protocol: TCP
+---
+# Deliberately no egress allow-rules, not even DNS.
+#
+# This workload serves static files from its own filesystem. It has no
+# upstreams, makes no outbound calls, and does not resolve any hostname at
+# runtime, so it needs no egress whatsoever — including to kube-dns. If a
+# future change does need outbound access, it should fail loudly and be
+# added here explicitly rather than inherited silently.
+#
+# This is the control that limits what a compromised container can do next:
+# no egress means no reaching the cloud metadata endpoint, no lateral
+# movement to other namespaces, and no exfiltration path.

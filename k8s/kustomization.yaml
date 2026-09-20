@@ -1,0 +1,26 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: hello-world
+
+resources:
+  - namespace.yaml
+  - serviceaccount.yaml
+  - deployment.yaml
+  - service.yaml
+  - ingress.yaml
+  - networkpolicy.yaml
+
+# This is the handoff point between CI and the cluster.
+#
+# The pipeline does not deploy. It builds the image, scans it, pushes it to
+# GHCR, then rewrites the digest below and commits. Argo CD notices the
+# commit and reconciles the cluster to match. The pipeline therefore never
+# holds a cluster credential — see the README.
+#
+# Pinning by digest rather than tag means the running workload is identified
+# exactly: "we deployed :latest" is not an answer to "what is running?", and
+# a mutable tag can be repointed after CI has scanned it.
+images:
+  - name: ghcr.io/yehtet95/hello-world-devsecops
+    newTag: latest

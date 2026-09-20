@@ -1,0 +1,46 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: hello-world
+  namespace: hello-world
+  annotations:
+    # Redirect HTTP to HTTPS.
+    #
+    # `force-ssl-redirect` rather than `ssl-redirect`: the latter is a no-op
+    # unless the Ingress declares a `tls:` block for the host, which this one
+    # deliberately does not — the demo relies on ingress-nginx's self-signed
+    # default certificate. Using the plain `ssl-redirect` annotation here
+    # silently serves plaintext, which is exactly the kind of control that
+    # looks present on review and does nothing.
+    #
+    # Browsers will still warn on the self-signed certificate. That is a
+    # certificate *trust* problem, not a transport one, and the brief puts
+    # certificates and DNS out of scope.
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+
+    # AUTHENTICATION IS NOT WIRED UP YET. When oauth2-proxy is added, these
+    # annotations are what put it in front of the page:
+    #
+    #   nginx.ingress.kubernetes.io/auth-url: "https://$host/oauth2/auth"
+    #   nginx.ingress.kubernetes.io/auth-signin: "https://$host/oauth2/start?rd=$escaped_request_uri"
+    #
+    # Enforcing at the ingress rather than in the app means an anonymous
+    # request is rejected before it ever reaches the pod.
+spec:
+  # Set explicitly. The controller is configured with
+  # watchIngressWithoutClass: false, so an Ingress that omits this is simply
+  # not served rather than being silently picked up — fail closed.
+  ingressClassName: nginx
+  rules:
+    # nip.io resolves *.127.0.0.1.nip.io to 127.0.0.1 with no hosts-file
+    # entry or DNS setup. Certificates and DNS are out of scope per the brief.
+    - host: hello.127.0.0.1.nip.io
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: hello-world
+                port:
+                  name: http

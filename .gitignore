@@ -15,5 +15,4 @@ charts/*.tgz
 *.pem
 *.key
 
-# The assessment brief itself — not mine to publish
 tech-challenge-devsecops-engineer.md

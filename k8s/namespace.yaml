@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: hello-world
+  labels:
+    # Pod Security Admission, enforcing the `restricted` profile. This is the
+    # backstop for the securityContext in deployment.yaml: if someone later
+    # edits that Deployment to run as root, add a capability, or set
+    # privileged: true, the API server rejects the pod outright rather than
+    # quietly scheduling it. Controls that live only in the manifest they
+    # protect are conventions; this makes it an admission decision.
+    #
+    # `warn` and `audit` are set alongside `enforce` so that a violating
+    # manifest produces a visible warning at apply time, not just a failure
+    # at pod-creation time further down the line.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted

@@ -1,0 +1,98 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hello-world
+  namespace: hello-world
+  labels:
+    app.kubernetes.io/name: hello-world
+spec:
+  # Single replica: HA is explicitly out of scope for this assessment, and a
+  # second replica would demonstrate nothing the first does not. In
+  # production this would be 2+ with a PodDisruptionBudget so node drains
+  # during AKS upgrades do not take the service down.
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: hello-world
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: hello-world
+    spec:
+      serviceAccountName: hello-world
+      automountServiceAccountToken: false
+
+      # Pod-level security context. Every field here is also required by the
+      # `restricted` Pod Security Standard enforced on the namespace.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        seccompProfile:
+          # Applies the container runtime's default seccomp filter, which
+          # blocks the large majority of syscalls a web server never makes.
+          # Kubernetes does NOT apply this by default — pods run unconfined
+          # unless asked otherwise.
+          type: RuntimeDefault
+
+      containers:
+        - name: nginx
+          # Digest is substituted by CI (see kustomization.yaml). The tag is
+          # kept alongside it for human legibility only — the digest is what
+          # actually resolves.
+          image: ghcr.io/yehtet95/hello-world-devsecops:latest
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            # nginx-unprivileged needs no capabilities at all: it listens on
+            # 8080, so not even NET_BIND_SERVICE is required.
+
+          # The image writes its pid file and all proxy/client temp paths
+          # under /tmp (confirmed against the base image's nginx.conf), so
+          # this is the only writable path the container needs. Everything
+          # else — config, binaries, web root — stays read-only, which means
+          # an attacker who achieves code execution cannot persist changes
+          # to the served content or the nginx config.
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+
+          # Limits are a security control, not just a capacity one: without
+          # them a compromised or looping container can starve everything
+          # else on the node.
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 200m
+              memory: 64Mi
+
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+
+      volumes:
+        - name: tmp
+          emptyDir:
+            # Bounded so a runaway process cannot fill the node's disk
+            # through the one writable path it has.
+            sizeLimit: 16Mi

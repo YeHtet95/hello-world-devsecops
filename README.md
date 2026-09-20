@@ -14,8 +14,11 @@ The application is one HTML file.
 | ------------------------------------------- | ---------------------------- | ---------------------------------------------------------------------------------- |
 | Local cluster, reproducible from the repo   | **Built**                    | [`cluster/`](cluster/), [`Makefile`](Makefile)                                     |
 | Ingress controller, pinned                  | **Built**                    | [`cluster/ingress-nginx-values.yaml`](cluster/ingress-nginx-values.yaml)           |
-| Page served from an image I built           | _Not yet built_              | —                                                                                  |
-| Everything in Git                           | _In progress_                | this repo                                                                          |
+| Page served from an image I built           | **Built**                    | [`app/Dockerfile`](app/Dockerfile), [`k8s/`](k8s/)                                 |
+| Workload hardening (non-root, read-only FS) | **Built**                    | [`k8s/deployment.yaml`](k8s/deployment.yaml)                                       |
+| Pod Security Admission (`restricted`)       | **Built**                    | [`k8s/namespace.yaml`](k8s/namespace.yaml)                                         |
+| NetworkPolicy                               | **Written, inert on kind**   | [`k8s/networkpolicy.yaml`](k8s/networkpolicy.yaml)                                 |
+| Everything in Git                           | **Built**                    | this repo                                                                          |
 | Reaches the cluster through automation      | _Designed, not built_        | [Deployment model](#deployment-model-the-pipeline-never-holds-cluster-credentials) |
 | Scheduled vulnerability scanning in-cluster | _Designed, not built_        | [Acting on scan results](#acting-on-scan-results)                                  |
 | Authentication in front of the page         | _Designed, not built_        | [Authentication](#authentication)                                                  |
@@ -50,11 +53,60 @@ curl -s -o /dev/null -w '%{http_code}\n' http://localhost:8080/   # 404 = contro
 
 Tear down with `make cluster-down`.
 
+### Deploying the application
+
+While iterating, the image is built locally and side-loaded into kind:
+
+```bash
+docker build -t ghcr.io/yehtet95/hello-world-devsecops:dev app/
+kind load docker-image ghcr.io/yehtet95/hello-world-devsecops:dev --name hello-world
+kubectl apply -k k8s/
+```
+
+This is **not** the deployment path being demoed — per the brief, manual
+`kubectl` is for iteration only. The demo path is CI → GHCR → Argo CD, which
+is not yet built.
+
+Then: <https://hello.127.0.0.1.nip.io:8443/> (self-signed certificate, so
+expect a browser warning).
+
 ### Verified working
 
-Deploying a throwaway nginx behind an Ingress on `hello.127.0.0.1.nip.io`
-returns `200` on both `:8080` and `:8443` from the macOS host, through kind's
-port mappings and the ingress controller. Screenshots in [`docs/evidence/`](docs/evidence/).
+Each of these was checked against the running cluster, not assumed:
+
+| Check | Result |
+|---|---|
+| Page served over HTTPS through the ingress | `HTTP 200` |
+| Plain HTTP | `HTTP 308` redirect to HTTPS |
+| Container user | `uid=101(nginx)` — not root |
+| Write to web root (`/usr/share/nginx/html`) | `Read-only file system` |
+| Write to `/tmp` | permitted — the one writable path, an `emptyDir` capped at 16Mi |
+| ServiceAccount token inside the pod | `No such file or directory` — not mounted |
+| Pod Security Admission | a non-compliant test pod was **rejected by the API server** |
+| nginx version disclosure | no `Server` version header in responses |
+
+The Pod Security Admission check is the one worth reproducing at the showcase,
+because it proves the control is an admission decision rather than a
+convention:
+
+```console
+$ kubectl -n hello-world run psa-test --image=curlimages/curl:8.11.1 --command -- sleep 30
+Error from server (Forbidden): pods "psa-test" is forbidden:
+violates PodSecurity "restricted:latest": allowPrivilegeEscalation != false,
+unrestricted capabilities, runAsNonRoot != true, seccompProfile
+```
+
+**What is not verified: the NetworkPolicies.** kind's default CNI (kindnet)
+does not implement NetworkPolicy, so the objects in
+[`k8s/networkpolicy.yaml`](k8s/networkpolicy.yaml) are accepted by the API
+server and enforce nothing locally. They are correct as written and would be
+enforced on AKS with Azure CNI or Calico. I have left them in the repo with
+that caveat stated in the file itself, because a policy that silently does
+nothing is worse than none — it reads as coverage on review and provides zero.
+Enforcing them locally would mean recreating the cluster with
+`disableDefaultCNI: true` and installing Calico.
+
+Screenshots in [`docs/evidence/`](docs/evidence/).
 
 ---
 
@@ -273,6 +325,7 @@ the workload restriction above matters independently.
 
 ## Open items
 
-- Application image, manifests and pipeline are not yet built.
+- Pipeline (GitHub Actions), Argo CD, Trivy Operator and oauth2-proxy are not
+  yet built.
 - Evidence (`docs/evidence/`) to be captured once the full path is running.
 - Repository is not yet initialised as Git.
