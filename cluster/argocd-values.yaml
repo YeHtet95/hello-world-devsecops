@@ -71,6 +71,49 @@ dex:
   # running by default.
   enabled: false
 
+controller:
+  # Replace the application controller's default cluster-admin ClusterRole
+  # with the narrowest set of rules that still lets it reconcile this one
+  # application.
+  #
+  # This matters because the AppProject in gitops/appproject.yaml does NOT
+  # constrain it. An AppProject limits what an *Application* may declare;
+  # the controller's ServiceAccount is what actually performs the writes,
+  # and out of the box it can read every Secret in the cluster and create
+  # ClusterRoleBindings — i.e. escalate to full cluster-admin. Verified
+  # before changing it:
+  #
+  #   kubectl auth can-i list secrets --all-namespaces \
+  #     --as=system:serviceaccount:argocd:argocd-application-controller
+  #   yes
+  #
+  # The rules below cover exactly the resource kinds the AppProject allows,
+  # plus the pods/replicasets the controller reads to assess health and the
+  # events it writes. Anything else — Secrets, RBAC, CRDs, webhooks — is
+  # denied by omission.
+  #
+  # Trade-off, stated plainly: this instance can now only manage workloads
+  # of these kinds. Adding a ConfigMap or a Secret to k8s/ would fail to
+  # sync until this list and the AppProject are both updated. That friction
+  # is the control working, but on a multi-tenant Argo CD you would reach
+  # for one Argo CD instance per tenant, or per-namespace Roles, rather than
+  # one ever-growing cluster-wide list.
+  clusterRoleRules:
+    enabled: true
+    rules:
+      - apiGroups: [""]
+        resources: ["namespaces", "serviceaccounts", "services", "pods", "endpoints"]
+        verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+      - apiGroups: [""]
+        resources: ["events"]
+        verbs: ["create", "patch"]
+      - apiGroups: ["apps"]
+        resources: ["deployments", "replicasets"]
+        verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+      - apiGroups: ["networking.k8s.io"]
+        resources: ["ingresses", "networkpolicies"]
+        verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
 server:
   ingress:
     enabled: true

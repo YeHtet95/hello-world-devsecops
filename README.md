@@ -22,7 +22,8 @@ The application is one HTML file.
 | Build-time scan with a blocking threshold   | **Built**                    | same — gates 1 and 3                                                     |
 | Manifest misconfiguration scan (blocking)   | **Built**                    | same, plus [`.trivyignore.yaml`](.trivyignore.yaml)                      |
 | SBOM + provenance attestations              | **Built**                    | same — `sbom: true`, `provenance: mode=max`                              |
-| Reaches the cluster through automation      | _Half built_                 | CI publishes and commits the digest; Argo CD not yet installed           |
+| Reaches the cluster through automation      | **Built**                    | [`gitops/`](gitops/), [`cluster/argocd-values.yaml`](cluster/argocd-values.yaml) |
+| Argo CD controller scoped off cluster-admin | **Built**                    | [`cluster/argocd-values.yaml`](cluster/argocd-values.yaml)                       |
 | Scheduled vulnerability scanning in-cluster | _Designed, not built_        | [Acting on scan results](#acting-on-scan-results)                        |
 | Authentication in front of the page         | _Designed, not built_        | [Authentication](#authentication)                                        |
 | AKS provisioning                            | _Discussion only, by design_ |                                                                          |
@@ -77,8 +78,13 @@ CI published, pulled from GHCR rather than side-loaded:
 
 ```console
 $ kubectl -n hello-world get pod -o jsonpath='{.items[0].status.containerStatuses[0].imageID}'
-ghcr.io/yehtet95/hello-world-devsecops@sha256:6d58c0a2ee1d…
+ghcr.io/yehtet95/hello-world-devsecops@sha256:32816991ff35…
 ```
+
+Argo CD is installed by `make argocd && make gitops`. Its UI is at
+<https://argocd.127.0.0.1.nip.io:8443/>; `make argocd-password` reads the
+generated admin password out of the cluster. That password is deliberately
+not in this repo and not in any manifest.
 
 ### Verified working
 
@@ -133,7 +139,8 @@ Screenshots in [`docs/evidence/`](docs/evidence/).
                     │                            ▲             │
                     │  Trivy Operator ─scans─────┘             │
                     │                                          │
-                    │  ingress-nginx ──▶ oauth2-proxy ──▶ app   │
+                    │  ingress-nginx ──▶ [oauth2-proxy] ──▶ app │
+                    │                     ^ not built yet       │
                     └──────────────────────────────────────────┘
                                    ▲
                               :8443 (host)
@@ -155,8 +162,29 @@ contents; the digest cannot.
 ### Deployment model: the pipeline never holds cluster credentials
 
 **split responsibility**:
-GitHub Actions builds, scans, signs and pushes to GHCR, and **Argo CD inside
-the cluster pulls and reconciles**.
+GitHub Actions builds, scans and pushes to GHCR, and **Argo CD inside the
+cluster pulls and reconciles**. This is built and the full loop is verified —
+a push to `app/` reaches the browser with no human touching the cluster:
+
+```
+git push
+  → Actions: build → scan (blocking) → push to GHCR → commit digest to k8s/
+  → Argo CD: sees the commit → syncs → new pod running the exact digest
+  → https://hello.127.0.0.1.nip.io:8443/ serves the new page
+```
+
+Argo CD also holds **no git credential**, because the repo is public — one
+fewer long-lived secret in the cluster. Against a private repo this would be
+a read-only deploy key or GitHub App installation token scoped to this
+repository alone.
+
+**`selfHeal` is the part that is a security control, not just convenience.**
+It reverts changes made directly against the cluster, so `kubectl edit` to
+drop a `securityContext` — or to swap in an image that never passed the scan
+gate — is undone automatically. Verified: an unscanned `nginx:1.25-alpine`
+set with `kubectl set image` was reverted in about six seconds. That makes
+Git the *only* supported way to change what runs, rather than merely the
+recommended one.
 
 | Option                                      | Why not                                                                                                                                            |
 | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -323,8 +351,67 @@ API access at all: `automountServiceAccountToken: false`, its own
 ServiceAccount with no RoleBindings, no Secrets mounted, and a NetworkPolicy
 allowing ingress only from the ingress-nginx namespace and denying egress.
 
-Argo CD holds cluster-write by design. It
-should be scoped per-namespace rather than cluster-admin, which is the default.
+**Argo CD, which is the interesting one.** It holds cluster-write by design,
+so it is the highest-value target in the cluster — more so than the workload
+it deploys. Two separate controls, because they do different things and only
+having one is a common mistake:
+
+*The AppProject* ([`gitops/appproject.yaml`](gitops/appproject.yaml)) narrows
+what an Application may declare: one repo, one cluster, one namespace, and an
+allow-list of resource kinds. Cluster-scoped access is limited to `Namespace`,
+so an Application in this project cannot create a ClusterRoleBinding. Argo
+CD's built-in `default` project permits any repo into any namespace, and most
+installs never move off it. Verified — an Application pointing at a foreign
+repo is rejected:
+
+```console
+InvalidSpecError: application repo https://github.com/argoproj/argocd-example-apps.git
+is not permitted in project 'hello-world'
+```
+
+*The controller's own RBAC* is the control people miss, because an AppProject
+looks like it covers this and does not. The AppProject constrains what an
+Application may *declare*; the controller's ServiceAccount is what performs
+the writes. Out of the box it is effectively cluster-admin. Measured, not
+assumed:
+
+```console
+$ kubectl auth can-i list secrets --all-namespaces \
+    --as=system:serviceaccount:argocd:argocd-application-controller
+yes
+$ kubectl auth can-i create clusterrolebindings --as=...
+yes
+```
+
+Being able to create ClusterRoleBindings means it can grant itself anything;
+being able to read every Secret means every credential in the cluster. So the
+default ClusterRole was replaced with rules covering only the resource kinds
+the AppProject allows, plus the pods/replicasets needed for health assessment
+and the events it writes. After:
+
+```console
+list secrets cluster-wide:      no
+create clusterrolebindings:     no
+delete nodes:                   no
+read configmaps in kube-system: no
+update deployments in hello-world: yes   <- still works
+```
+
+And it still functions: `selfHeal` reverted a tampered image in about six
+seconds under the reduced permissions, which proves the write path is intact
+rather than merely that nothing has broken yet.
+
+The honest cost: this instance can now manage only these resource kinds.
+Adding a ConfigMap to `k8s/` fails to sync until both the AppProject and
+these rules are updated. That friction is the control working, but at
+multi-application scale you would run one Argo CD per tenant rather than
+grow a single cluster-wide list forever.
+
+**What is still over-privileged.** `argocd-server` was left on its default
+ClusterRole — it is the API behind the UI and narrowing it needs more care
+than the time here allowed. The initial admin account also still exists; in
+production that is disabled in favour of Entra ID via OIDC, the same as for
+the AKS API server itself.
 
 **In Azure.** The cluster's kubelet identity needs `AcrPull` on the registry
 and nothing else — not `Contributor` on the resource group, which is the
@@ -393,8 +480,11 @@ the workload restriction above matters independently.
 
 ## Open items
 
-- Argo CD, Trivy Operator and oauth2-proxy are not yet built. Until Argo CD
-  is installed, the pipeline's final commit has nothing watching it, so the
-  cluster is still updated by a manual `kubectl apply -k k8s/`.
+- Trivy Operator (scheduled in-cluster scanning) and oauth2-proxy
+  (authentication) are not yet built. These are the two remaining items from
+  the brief's outcome list.
+- `argocd-server` still runs on its default ClusterRole, and the Argo CD
+  initial admin account still exists. Both are noted under
+  [least privilege](#least-privilege).
 - The blocking thresholds — HIGH/CRITICAL for images, MEDIUM and above for
   manifests — are a judgement call, not a standard.
