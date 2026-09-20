@@ -4,7 +4,7 @@
 # It ends by committing an image digest to this repository; Argo CD inside the
 # cluster notices the commit and reconciles. That means no kubeconfig, no
 # service principal, and no inbound network path to the cluster exists
-# anywhere in CI. See the README for the alternatives this was weighed against.
+# anywhere in CI.
 #
 # Every action below is pinned to a commit SHA rather than a tag. Tags on
 # third-party actions are mutable and the action runs with access to this
@@ -19,12 +19,12 @@ on:
       # Deliberately excludes k8s/** so the digest commit this workflow makes
       # at the end cannot retrigger it. Belt-and-braces: a commit pushed with
       # GITHUB_TOKEN does not trigger workflow runs anyway.
-      - 'app/**'
-      - '.github/workflows/build-scan-publish.yml'
+      - "app/**"
+      - ".github/workflows/build-scan-publish.yml"
   pull_request:
     paths:
-      - 'app/**'
-      - '.github/workflows/build-scan-publish.yml'
+      - "app/**"
+      - ".github/workflows/build-scan-publish.yml"
   workflow_dispatch:
 
 # Read-only by default; each job widens only what it needs.
@@ -45,8 +45,8 @@ jobs:
   build-scan-publish:
     runs-on: ubuntu-latest
     permissions:
-      contents: write        # commit the digest back to k8s/kustomization.yaml
-      packages: write        # push to GHCR
+      contents: write # commit the digest back to k8s/kustomization.yaml
+      packages: write # push to GHCR
       security-events: write # upload Trivy findings to the Security tab
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -90,7 +90,7 @@ jobs:
           scan-type: image
           severity: HIGH,CRITICAL
           ignore-unfixed: true
-          exit-code: '1'
+          exit-code: "1"
           format: table
 
       # ---------------------------------------------------------------------
@@ -109,7 +109,7 @@ jobs:
           scan-type: image
           severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
           ignore-unfixed: false
-          exit-code: '0'
+          exit-code: "0"
           format: sarif
           output: trivy-image.sarif
 
@@ -141,7 +141,7 @@ jobs:
           scan-ref: k8s/
           severity: MEDIUM,HIGH,CRITICAL
           trivyignores: .trivyignore.yaml
-          exit-code: '1'
+          exit-code: "1"
           format: sarif
           output: trivy-config.sarif
 

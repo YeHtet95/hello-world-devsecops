@@ -1,0 +1,60 @@
+# Trivy Operator — the in-cluster half of vulnerability scanning.
+#
+# The pipeline scans an image once, at build time, and that tells you nothing
+# about tomorrow: an image that passed its gate on Monday is not clean on
+# Friday when a new CVE is disclosed against a package inside it. This
+# operator scans what is actually running, on a schedule, and writes the
+# results into the cluster as CRDs.
+#
+# Chart pinned; version tracked in the Makefile.
+
+# Watch only the application namespace.
+#
+# The default is every namespace, which on this cluster means also scanning
+# Argo CD, ingress-nginx and kube-system — dozens of extra scan jobs on a
+# laptop, and a wall of findings about components we did not build and do not
+# control. In production you would scan everything, but you would also have
+# somewhere to put the results and an owner for each namespace. Scanning
+# narrowly and reporting well beats scanning everything into a void.
+targetNamespaces: "hello-world"
+
+trivy:
+  # Scan the filesystem of running containers rather than pulling each image
+  # again from the registry.
+  mode: Standalone
+  # Only what is actionable. Reporting LOW/MEDIUM here would bury the
+  # findings that matter under noise nobody triages.
+  severity: HIGH,CRITICAL
+  ignoreUnfixed: true
+
+operator:
+  # How often a workload is rescanned even if nothing about it changed.
+  # This is the control that catches newly-disclosed CVEs in an image that
+  # has not been rebuilt. Six hours is aggressive for a demo; daily is
+  # typical in production.
+  scanJobsConcurrentLimit: 2
+  scannerReportTTL: "24h"
+  vulnerabilityScannerScanOnlyCurrentRevisions: true
+
+  # Config auditing (misconfiguration of the running workload) is left on:
+  # it is the in-cluster mirror of the manifest scan the pipeline runs, and
+  # catches drift the pipeline cannot see because it never looks at the
+  # cluster.
+  configAuditScannerEnabled: true
+  vulnerabilityScannerEnabled: true
+
+  # Off: these add scan jobs and findings we have nowhere to route yet.
+  # Turning on a scanner whose output nobody reads is how you end up with a
+  # cluster full of ignored CRDs.
+  exposedSecretScannerEnabled: true
+  rbacAssessmentScannerEnabled: false
+  infraAssessmentScannerEnabled: false
+  clusterComplianceEnabled: false
+
+# Modest footprint — this shares a laptop with Argo CD and ingress-nginx.
+resources:
+  requests:
+    cpu: 50m
+    memory: 96Mi
+  limits:
+    memory: 512Mi

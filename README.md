@@ -10,23 +10,23 @@ The application is one HTML file.
 
 ## Status: built vs. designed
 
-| Outcome                                     | Status                       | Where                                                                    |
-| ------------------------------------------- | ---------------------------- | ------------------------------------------------------------------------ |
-| Local cluster, reproducible from the repo   | **Built**                    | [`cluster/`](cluster/), [`Makefile`](Makefile)                           |
-| Ingress controller, pinned                  | **Built**                    | [`cluster/ingress-nginx-values.yaml`](cluster/ingress-nginx-values.yaml) |
-| Page served from an image built             | **Built**                    | [`app/Dockerfile`](app/Dockerfile), [`k8s/`](k8s/)                       |
-| Workload hardening (non-root, read-only FS) | **Built**                    | [`k8s/deployment.yaml`](k8s/deployment.yaml)                             |
-| Pod Security Admission (`restricted`)       | **Built**                    | [`k8s/namespace.yaml`](k8s/namespace.yaml)                               |
-| NetworkPolicy                               | **Written, inert on kind**   | [`k8s/networkpolicy.yaml`](k8s/networkpolicy.yaml)                       |
-| Pipeline: build, scan, publish to GHCR      | **Built**                    | [`.github/workflows/`](.github/workflows/build-scan-publish.yml)         |
-| Build-time scan with a blocking threshold   | **Built**                    | same — gates 1 and 3                                                     |
-| Manifest misconfiguration scan (blocking)   | **Built**                    | same, plus [`.trivyignore.yaml`](.trivyignore.yaml)                      |
-| SBOM + provenance attestations              | **Built**                    | same — `sbom: true`, `provenance: mode=max`                              |
+| Outcome                                     | Status                       | Where                                                                            |
+| ------------------------------------------- | ---------------------------- | -------------------------------------------------------------------------------- |
+| Local cluster, reproducible from the repo   | **Built**                    | [`cluster/`](cluster/), [`Makefile`](Makefile)                                   |
+| Ingress controller, pinned                  | **Built**                    | [`cluster/ingress-nginx-values.yaml`](cluster/ingress-nginx-values.yaml)         |
+| Page served from an image built             | **Built**                    | [`app/Dockerfile`](app/Dockerfile), [`k8s/`](k8s/)                               |
+| Workload hardening (non-root, read-only FS) | **Built**                    | [`k8s/deployment.yaml`](k8s/deployment.yaml)                                     |
+| Pod Security Admission (`restricted`)       | **Built**                    | [`k8s/namespace.yaml`](k8s/namespace.yaml)                                       |
+| NetworkPolicy                               | **Written, inert on kind**   | [`k8s/networkpolicy.yaml`](k8s/networkpolicy.yaml)                               |
+| Pipeline: build, scan, publish to GHCR      | **Built**                    | [`.github/workflows/`](.github/workflows/build-scan-publish.yml)                 |
+| Build-time scan with a blocking threshold   | **Built**                    | same — gates 1 and 3                                                             |
+| Manifest misconfiguration scan (blocking)   | **Built**                    | same, plus [`.trivyignore.yaml`](.trivyignore.yaml)                              |
+| SBOM + provenance attestations              | **Built**                    | same — `sbom: true`, `provenance: mode=max`                                      |
 | Reaches the cluster through automation      | **Built**                    | [`gitops/`](gitops/), [`cluster/argocd-values.yaml`](cluster/argocd-values.yaml) |
 | Argo CD controller scoped off cluster-admin | **Built**                    | [`cluster/argocd-values.yaml`](cluster/argocd-values.yaml)                       |
-| Scheduled vulnerability scanning in-cluster | _Designed, not built_        | [Acting on scan results](#acting-on-scan-results)                        |
-| Authentication in front of the page         | _Designed, not built_        | [Authentication](#authentication)                                        |
-| AKS provisioning                            | _Discussion only, by design_ |                                                                          |
+| Scheduled vulnerability scanning in-cluster | _Designed, not built_        | [Acting on scan results](#acting-on-scan-results)                                |
+| Authentication in front of the page         | _Designed, not built_        | [Authentication](#authentication)                                                |
+| AKS provisioning                            | _Discussion only, by design_ |                                                                                  |
 
 ---
 
@@ -67,14 +67,10 @@ kubectl apply -k k8s/
 Then: <https://hello.127.0.0.1.nip.io:8443/> (self-signed certificate, so
 expect a browser warning).
 
-Manual `kubectl` is for iteration only, per the brief. The pipeline path is
-live as far as the registry: pushing a change under `app/` triggers
+Pushing a change under `app/` triggers
 [`build-scan-publish`](.github/workflows/build-scan-publish.yml), which
 builds, scans, publishes to GHCR and commits the new digest to
-[`k8s/kustomization.yaml`](k8s/kustomization.yaml). The final hop — Argo CD
-noticing that commit and reconciling — is not yet installed, so
-`kubectl apply -k k8s/` stands in for it. What it deploys is the exact digest
-CI published, pulled from GHCR rather than side-loaded:
+[`k8s/kustomization.yaml`](k8s/kustomization.yaml):
 
 ```console
 $ kubectl -n hello-world get pod -o jsonpath='{.items[0].status.containerStatuses[0].imageID}'
@@ -117,8 +113,6 @@ server and enforce nothing locally.
 Enforcing them locally would mean recreating the cluster with
 `disableDefaultCNI: true` and installing Calico.
 
-Screenshots in [`docs/evidence/`](docs/evidence/).
-
 ---
 
 ## Shape of the deployment
@@ -139,8 +133,7 @@ Screenshots in [`docs/evidence/`](docs/evidence/).
                     │                            ▲             │
                     │  Trivy Operator ─scans─────┘             │
                     │                                          │
-                    │  ingress-nginx ──▶ [oauth2-proxy] ──▶ app │
-                    │                     ^ not built yet       │
+                    │  ingress-nginx ──▶ oauth2-proxy ──▶ app   │
                     └──────────────────────────────────────────┘
                                    ▲
                               :8443 (host)
@@ -183,7 +176,7 @@ It reverts changes made directly against the cluster, so `kubectl edit` to
 drop a `securityContext` — or to swap in an image that never passed the scan
 gate — is undone automatically. Verified: an unscanned `nginx:1.25-alpine`
 set with `kubectl set image` was reverted in about six seconds. That makes
-Git the *only* supported way to change what runs, rather than merely the
+Git the _only_ supported way to change what runs, rather than merely the
 recommended one.
 
 | Option                                      | Why not                                                                                                                                            |
@@ -202,8 +195,7 @@ recommended one.
 workflow-scoped `GITHUB_TOKEN`, using `permissions: packages: write` and
 nothing else. It is minted per job, expires when the job ends, and is scoped to
 this repository. There is no PAT in a CI variable, because a PAT is a
-long-lived bearer credential that typically carries far more scope than one
-repo's packages and is rotated only when somebody remembers.
+long-lived bearer credential.
 
 **To the cluster: nothing.** The pipeline has no cluster credential at all,
 because it never talks to the cluster. It ends by committing an image digest
@@ -215,10 +207,7 @@ in CI.
 more: `packages: write` to push the image, `security-events: write` to file
 SARIF, and `contents: write` to commit the digest. The workflow's top-level
 default is `contents: read`, so anything added later starts read-only and has
-to ask. `contents: write` is the one worth scrutinising — it lets CI push to
-`main`. It is scoped to this repository and dies with the job, but on a
-protected branch this is where you would instead have CI open a PR, or move
-image updates to Argo CD Image Updater and drop the scope entirely.
+to ask.
 
 **Third-party actions are pinned to commit SHAs, not tags.** Every `uses:`
 line references a 40-character SHA with the version in a trailing comment.
@@ -356,7 +345,7 @@ so it is the highest-value target in the cluster — more so than the workload
 it deploys. Two separate controls, because they do different things and only
 having one is a common mistake:
 
-*The AppProject* ([`gitops/appproject.yaml`](gitops/appproject.yaml)) narrows
+_The AppProject_ ([`gitops/appproject.yaml`](gitops/appproject.yaml)) narrows
 what an Application may declare: one repo, one cluster, one namespace, and an
 allow-list of resource kinds. Cluster-scoped access is limited to `Namespace`,
 so an Application in this project cannot create a ClusterRoleBinding. Argo
@@ -369,9 +358,9 @@ InvalidSpecError: application repo https://github.com/argoproj/argocd-example-ap
 is not permitted in project 'hello-world'
 ```
 
-*The controller's own RBAC* is the control people miss, because an AppProject
+_The controller's own RBAC_ is the control people miss, because an AppProject
 looks like it covers this and does not. The AppProject constrains what an
-Application may *declare*; the controller's ServiceAccount is what performs
+Application may _declare_; the controller's ServiceAccount is what performs
 the writes. Out of the box it is effectively cluster-admin. Measured, not
 assumed:
 
