@@ -13,14 +13,21 @@ metadata:
     # silently serves plaintext
     nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
 
-    # AUTHENTICATION IS NOT WIRED UP YET. When oauth2-proxy is added, these
-    # annotations are what put it in front of the page:
+    # Authentication, enforced here rather than in the application.
     #
-    #   nginx.ingress.kubernetes.io/auth-url: "https://$host/oauth2/auth"
-    #   nginx.ingress.kubernetes.io/auth-signin: "https://$host/oauth2/start?rd=$escaped_request_uri"
+    # ingress-nginx calls auth-url as a subrequest before proxying. If
+    # oauth2-proxy returns 401 the request is never forwarded to the nginx
+    # pod, and the visitor is redirected to auth-signin instead. The static
+    # page therefore contains no auth code at all — the thing serving
+    # content is not the thing deciding who may see it.
     #
-    # Enforcing at the ingress rather than in the app means an anonymous
-    # request is rejected before it ever reaches the pod.
+    # auth-url is the in-cluster Service address, so this subrequest never
+    # leaves the cluster and does not depend on external DNS.
+    nginx.ingress.kubernetes.io/auth-url: "http://oauth2-proxy.hello-world.svc.cluster.local:4180/oauth2/auth"
+    # auth-signin is a browser-facing redirect, so it must be an address the
+    # browser can reach — including the :8443 host port kind maps.
+    # $escaped_request_uri preserves the originally requested path.
+    nginx.ingress.kubernetes.io/auth-signin: "https://$host:8443/oauth2/start?rd=$escaped_request_uri"
 spec:
   # Set explicitly. The controller is configured with
   # watchIngressWithoutClass: false

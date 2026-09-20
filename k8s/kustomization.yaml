@@ -10,6 +10,7 @@ resources:
   - service.yaml
   - ingress.yaml
   - networkpolicy.yaml
+  - oauth2-proxy.yaml
 
 # This is the handoff point between CI and the cluster.
 #
