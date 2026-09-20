@@ -72,7 +72,24 @@ spec:
           # and issues the session cookies that gate access, so of
           # everything in this repo it is the image where a swapped tag
           # would matter most.
-          image: quay.io/oauth2-proxy/oauth2-proxy:v7.13.0@sha256:56e3daedf765c7a1eea6e366fbe684be7d3084830ade14b6174570d3c7960954
+          #
+          # v7.15.3, not v7.13.0. The first version deployed here was
+          # v7.13.0, chosen without scanning it — and Trivy Operator
+          # immediately reported 4 critical and 14 high against it, two of
+          # them (CVE-2026-34457, CVE-2026-40575) in oauth2-proxy's own code
+          # and fixed in 7.15.2. That is the in-cluster scanner catching a
+          # mistake the build pipeline structurally cannot: this image is
+          # pulled from a third party, never built by our CI, so no
+          # build-time gate ever looks at it.
+          #
+          # v7.15.3 scans with zero fixable criticals. It does still carry
+          # ~15 fixable HIGH findings in transitive Go dependencies
+          # (grpc, golang.org/x/net, the Go stdlib). Those cannot be fixed
+          # from here — they need upstream to rebuild against a newer
+          # toolchain. See the README's "finding you can't fix" section;
+          # this is that situation, with a real CVE list rather than a
+          # hypothetical one.
+          image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.3@sha256:10a1165743a192e1940b4708fb9647027185ce11a681a1c5519b442ff7f1f561
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
