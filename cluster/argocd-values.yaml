@@ -40,6 +40,43 @@ configs:
     # Turning off anonymous access is not a default worth trusting silently.
     users.anonymous.enabled: "false"
 
+    # The application controller's cluster cache tries to list every
+    # built-in resource kind cluster-wide (for the resource tree / health
+    # UI), regardless of what any Application actually declares. With the
+    # scoped-down controller.clusterRoleRules below, that includes kinds it
+    # has no RBAC for — e.g. cronjobs.batch — and a single "forbidden" on
+    # any one of them poisons the *entire* cache sync, leaving every
+    # Application's sync status stuck at Unknown forever.
+    #
+    # Restrict the cache to exactly the kinds clusterRoleRules grants RBAC
+    # for, which is exactly what k8s/kustomization.yaml deploys. Keep the
+    # two lists in sync.
+    resource.inclusions: |
+      - apiGroups:
+          - ""
+        kinds:
+          - Namespace
+          - ServiceAccount
+          - Service
+          - Pod
+          - Endpoints
+        clusters:
+          - "*"
+      - apiGroups:
+          - apps
+        kinds:
+          - Deployment
+          - ReplicaSet
+        clusters:
+          - "*"
+      - apiGroups:
+          - networking.k8s.io
+        kinds:
+          - Ingress
+          - NetworkPolicy
+        clusters:
+          - "*"
+
   # The repository this instance is allowed to deploy from.
   #
   # It is public, so Argo CD needs no git credential at all — one fewer
