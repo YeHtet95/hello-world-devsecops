@@ -26,4 +26,4 @@ images:
     # .github/workflows/build-scan-publish.yml.
     #
     # Placeholder until the first pipeline run publishes a real image.
-    digest: sha256:8ed22695844c4505c2057d4ad1c5c8cd646a35d8a7312901352e68c86b6ffe49
+    digest: sha256:38fd053a92d0063e90f90cd8e5a72dba2747e9a9e5599b4e3b0888277e918ff9
