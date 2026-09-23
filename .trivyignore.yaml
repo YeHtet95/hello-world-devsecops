@@ -7,12 +7,17 @@
 # KSV-0020/KSV-0021 in k8s/deployment.yaml, which were resolved by moving
 # the workload to UID 10101 instead of being suppressed.
 
-# NOTE: `paths` are relative to the scan root passed to Trivy (k8s/),
-# not to the repository root.
+# NOTE: this workflow scans `k8s/` as scan-ref, and `paths:` below is
+# supposed to be relative to that root. In practice a manifest-only push
+# once failed even though a local `trivy config k8s/` reproduction with the
+# same ignorefile passed cleanly — the CI run gave no readable reason (SARIF
+# output prints no table), so the exact path convention trivy-action uses
+# internally couldn't be confirmed either way. Every path below is listed
+# both ways (with and without the `k8s/` prefix) until that's pinned down.
 
 misconfigurations:
   - id: KSV-0013
-    paths: ["deployment.yaml"]
+    paths: ["deployment.yaml", "k8s/deployment.yaml"]
     statement: >-
       "should specify an image tag" — the manifest deliberately pins by
       SHA256 digest instead, which is strictly stronger: a tag can be
@@ -23,7 +28,7 @@ misconfigurations:
     expired_at: 2027-03-31
 
   - id: KSV-0125
-    paths: ["deployment.yaml"]
+    paths: ["deployment.yaml", "k8s/deployment.yaml"]
     statement: >-
       "image from an untrusted registry" — ghcr.io is not in Trivy's default
       trusted-registry list. It is this project's own registry, the image is
@@ -34,7 +39,7 @@ misconfigurations:
     expired_at: 2027-03-31
 
   - id: KSV-0125
-    paths: ["oauth2-proxy.yaml"]
+    paths: ["oauth2-proxy.yaml", "k8s/oauth2-proxy.yaml"]
     statement: >-
       Same rule, a different registry and a different reason. quay.io is not
       ours — it is oauth2-proxy's own official publisher, which is *why* it

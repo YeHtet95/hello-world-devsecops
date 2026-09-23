@@ -129,9 +129,16 @@ jobs:
       #
       # This is blocking because the baseline is clean. A scanner that always
       # reports something is a scanner people stop reading, so the rule is:
-      # get to zero, then fail on regression. The two findings that remain
+      # get to zero, then fail on regression. The findings that remain
       # wrong-in-context are recorded in .trivyignore.yaml with a reason and
       # an expiry rather than being silenced by lowering the threshold.
+      #
+      # Split into a table-format blocking step and a separate SARIF step,
+      # mirroring gates 1+2 above, after this gate once failed with no
+      # visible reason in the log — SARIF output prints no human-readable
+      # table, so `exit-code 1` with `format: sarif` fails the job silently.
+      # Whoever is debugging a red pipeline needs the table, not just the
+      # Security tab.
       # ---------------------------------------------------------------------
       - name: Trivy scan (Kubernetes manifests, blocking)
         if: always()
@@ -142,6 +149,17 @@ jobs:
           severity: MEDIUM,HIGH,CRITICAL
           trivyignores: .trivyignore.yaml
           exit-code: "1"
+          format: table
+
+      - name: Trivy scan (Kubernetes manifests → SARIF)
+        if: always()
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          scan-type: config
+          scan-ref: k8s/
+          severity: MEDIUM,HIGH,CRITICAL
+          trivyignores: .trivyignore.yaml
+          exit-code: "0"
           format: sarif
           output: trivy-config.sarif
 
