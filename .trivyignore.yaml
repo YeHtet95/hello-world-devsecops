@@ -28,6 +28,21 @@ misconfigurations:
       "image from an untrusted registry" — ghcr.io is not in Trivy's default
       trusted-registry list. It is this project's own registry, the image is
       built by this repository's pipeline and pinned by digest. The correct
-      long-term fix is to configure the trusted registry list r; doing that properly belongs with the AKS/ACR work,
-      where the registry would be ACR.
+      long-term fix is to configure the trusted registry list; doing that
+      properly belongs with the AKS/ACR work, where the registry would be
+      ACR.
+    expired_at: 2027-03-31
+
+  - id: KSV-0125
+    paths: ["oauth2-proxy.yaml"]
+    statement: >-
+      Same rule, a different registry and a different reason. quay.io is not
+      ours — it is oauth2-proxy's own official publisher, which is *why* it
+      is trusted here: pulling from the project's own registry, pinned by
+      digest, is more traceable than re-hosting a copy ourselves would be.
+      This file was added after the ghcr.io exception above was written and
+      was not covered by it — the gate correctly caught an untriaged
+      manifest rather than a real regression. The same long-term fix
+      applies: configure the trust list explicitly instead of accepting
+      registry-by-registry.
     expired_at: 2027-03-31
