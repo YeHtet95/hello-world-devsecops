@@ -14,12 +14,15 @@
 # receives security fixes without mainline's feature churn, which is what you
 # want under an image that is rebuilt on a schedule.
 #
-# This specific tag was chosen because it scans clean: 1.29.x currently
-# carries fixable HIGH/CRITICAL CVEs in pcre2, zlib, musl, libxml2 and
-# nghttp2 inherited from its older Alpine layer, and the pipeline's blocking
-# gate rejects exactly those. Verified with Trivy before committing rather
-# than discovered by a red build.
-FROM nginxinc/nginx-unprivileged:1.30-alpine@sha256:daa17b944bac2b578e962da4c61ad72a59233b3c63abea17113acaf4e6b9aea4
+# -slim, not just -alpine: this is the second time the base image needed
+# bumping after being clean when first pinned. 1.30-alpine picked up a fresh
+# HIGH (CVE-2026-93990, libexpat, XML parsing) after Alpine's package index
+# moved on — the same package is simply absent from -slim, which strips
+# packages the base tag carries but this workload, a static file server,
+# never uses. Fewer packages installed is fewer future CVEs to react to, not
+# just fewer today. Confirmed unchanged: UID 101, port 8080, writes only to
+# /tmp, multi-arch, and it actually serves a request.
+FROM nginxinc/nginx-unprivileged:1.30.5-alpine3.24-slim@sha256:307ca0bded4dda86dade6f5bd2a2551601bec9bac3fd73a21613fabcd9eca66a
 
 # Links the GHCR package back to this repository
 LABEL org.opencontainers.image.source="https://github.com/YeHtet95/hello-world-devsecops" \
